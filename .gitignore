@@ -1,3 +1,5 @@
 .terraform.*
 .claude
 docs
+.Claude.md
+trivy-results.json

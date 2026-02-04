@@ -107,8 +107,11 @@ func validateClusterEndpoint(t *testing.T, endpoint string) {
 
 // validateClusterWithAWSSdk validates the cluster exists via AWS SDK
 func validateClusterWithAWSSdk(t *testing.T, region, clusterName string) {
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String(region),
+	sess, err := session.NewSessionWithOptions(session.Options{
+		Config: aws.Config{
+			Region: aws.String(region),
+		},
+		SharedConfigState: session.SharedConfigEnable,
 	})
 	require.NoError(t, err, "Failed to create AWS session")
 

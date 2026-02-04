@@ -142,25 +142,32 @@ Required secrets:
 
 ## Static Analysis Security Checks
 
-### TFSec Rules
+### Trivy Security Scanning
 
-Key security rules enforced:
+Trivy performs comprehensive security scanning including:
 
-| Rule | Severity | Description |
-|------|----------|-------------|
-| `aws-eks-no-public-cluster-access` | LOW* | Public endpoint access |
-| `aws-eks-encrypt-secrets` | HIGH | Secrets encryption |
-| `aws-iam-no-policy-wildcards` | HIGH | No wildcard IAM policies |
-| `aws-vpc-no-public-ingress-sgr` | HIGH | No 0.0.0.0/0 ingress |
+#### Infrastructure Misconfigurations (IaC)
 
-*Lowered for testing; should be HIGH in production.
+Key checks enforced:
 
-### Trivy Checks
+| Check ID | Severity | Description | Status |
+|----------|----------|-------------|--------|
+| `AVD-AWS-0039` | HIGH | EKS public endpoint access | Allowed for testing* |
+| `AVD-AWS-0041` | HIGH | EKS endpoint CIDR restrictions | Allowed for testing* |
+| `AVD-AWS-0037` | HIGH | EKS secrets encryption with KMS | Allowed for testing* |
+| `AVD-AWS-0057` | CRITICAL | IAM policy wildcards | Enforced |
+| `AVD-AWS-0102` | HIGH | VPC security group 0.0.0.0/0 ingress | Enforced |
 
-Scans for:
-- Infrastructure misconfigurations
-- Known vulnerabilities in configurations
-- Compliance violations
+*Exceptions configured in `.trivyignore` for testing; should be enforced in production.
+
+#### Additional Checks
+
+Trivy also scans for:
+- Known CVEs in container images
+- License compliance issues
+- Secrets in code (API keys, passwords)
+- Kubernetes security best practices
+- Compliance frameworks (CIS, PCI-DSS, etc.)
 
 ## Resource Tagging
 

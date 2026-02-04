@@ -21,7 +21,12 @@ plugin "aws" {
 # Naming conventions
 rule "terraform_naming_convention" {
   enabled = true
-  format  = "snake_case"
+
+  # Allow upper snake case variables with prefix TFC_ or TFE_,
+  # and enforce lower snake case for others
+  variable {
+    custom = "^TF[CE]_[A-Z][A-Z0-9]*(_[A-Z0-9]+)*|[a-z][a-z0-9]*(_[a-z0-9]+)*$"
+  }
 }
 
 # Documentation

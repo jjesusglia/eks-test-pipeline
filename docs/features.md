@@ -30,8 +30,7 @@
 | terraform fmt | Code formatting validation | N/A |
 | terraform validate | Configuration validation | N/A |
 | TFLint | Terraform linting with AWS ruleset | `.tflint.hcl` |
-| TFSec | Security scanning | `.tfsec.yml` |
-| Trivy | Infrastructure vulnerability scanning | `.trivyignore` |
+| Trivy | Security & vulnerability scanning (IaC misconfigurations, CVEs) | `.trivyignore` |
 
 ### Unit Tests (Stage 2)
 
@@ -58,8 +57,8 @@
 
 ### Triggers
 
-- Push to `main`/`master` branches
-- Pull requests to `main`/`master` branches
+- Push to `master` branches
+- Pull requests to `master` branches
 
 ### Cost Control Features
 

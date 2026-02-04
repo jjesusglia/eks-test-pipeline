@@ -39,8 +39,7 @@ Catch issues early without deploying infrastructure.
 | `terraform fmt` | Code formatting consistency | N/A |
 | `terraform validate` | Configuration syntax and internal consistency | N/A |
 | TFLint | Best practices, naming conventions, AWS-specific rules | `.tflint.hcl` |
-| TFSec | Security misconfigurations | `.tfsec.yml` |
-| Trivy | Infrastructure vulnerabilities | `.trivyignore` |
+| Trivy | Security misconfigurations, vulnerabilities, CVEs | `.trivyignore` |
 
 ### Running Locally
 
@@ -55,11 +54,8 @@ cd modules/eks-cluster && terraform init -backend=false && terraform validate
 tflint --init
 tflint --recursive
 
-# TFSec
-tfsec . --config-file .tfsec.yml
-
-# Trivy
-trivy config .
+# Trivy (security + vulnerabilities)
+trivy config . --severity CRITICAL,HIGH,MEDIUM
 ```
 
 ## Unit Tests

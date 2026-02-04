@@ -12,12 +12,9 @@ This project implements an automated test pipeline for a Terraform EKS module us
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
 │  │ Stage 1: Static Analysis (parallel)                    ~2-3 min     │    │
 │  │ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌─────────────┐  │    │
-│  │ │ terraform    │ │ terraform    │ │   TFLint     │ │   TFSec     │  │    │
-│  │ │    fmt       │ │  validate    │ │              │ │             │  │    │
+│  │ │ terraform    │ │ terraform    │ │   TFLint     │ │   Trivy     │  │    │
+│  │ │    fmt       │ │  validate    │ │              │ │ Security    │  │    │
 │  │ └──────────────┘ └──────────────┘ └──────────────┘ └─────────────┘  │    │
-│  │                                    ┌──────────────┐                  │    │
-│  │                                    │    Trivy     │                  │    │
-│  │                                    └──────────────┘                  │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
 │                                     │                                        │
 │                                     ▼                                        │
@@ -78,7 +75,7 @@ terratest/
 │   └── security.md               # Security considerations
 │
 ├── .tflint.hcl                   # TFLint configuration
-└── .tfsec.yml                    # TFSec configuration
+└── .trivyignore                  # Trivy exceptions
 ```
 
 ## Module Architecture
@@ -189,8 +186,7 @@ The `examples/complete` fixture deploys a full test environment:
 │     ├── terraform fmt                                          │
 │     ├── terraform validate                                     │
 │     ├── tflint                                                 │
-│     ├── tfsec                                                  │
-│     └── trivy                                                  │
+│     └── trivy (security + vulnerabilities)                     │
 │  3. Run unit tests                                             │
 │  4. (if main branch) Run integration tests                     │
 │     a. OIDC auth to AWS                                        │

@@ -3,11 +3,9 @@ name: Terraform EKS Module Tests
 on:
   push:
     branches:
-      - main
       - master
   pull_request:
     branches:
-      - main
       - master
 
 # Prevent concurrent runs on the same branch
@@ -18,7 +16,7 @@ concurrency:
 env:
   TERRAFORM_VERSION: "1.6.6"
   GO_VERSION: "1.21"
-  AWS_REGION: "us-west-2"
+  AWS_REGION: "us-west-1"
   TFLINT_VERSION: "v0.50.3"
 
 permissions:
@@ -45,6 +43,7 @@ jobs:
 
       - name: Terraform Format Check
         run: terraform fmt -check -recursive -diff
+        continue-on-error: false
 
   terraform-validate:
     name: Terraform Validate
@@ -70,6 +69,7 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
         working-directory: ${{ matrix.directory }}
+        continue-on-error: false
 
   tflint:
     name: TFLint
@@ -90,36 +90,29 @@ jobs:
         run: tflint --recursive --format=compact
         continue-on-error: false
 
-  tfsec:
-    name: TFSec Security Scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Run TFSec
-        uses: aquasecurity/tfsec-action@v1.0.3
-        with:
-          soft_fail: false
-          format: lovely
-          additional_args: --config-file .tfsec.yml
-
   trivy:
-    name: Trivy IaC Scan
+    name: Trivy Security Scan
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run Trivy vulnerability scanner
+      - name: Run Trivy IaC scanner
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
           scan-ref: '.'
-          format: 'table'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
           exit-code: '1'
-          severity: 'CRITICAL,HIGH'
+          severity: 'CRITICAL,HIGH,MEDIUM'
           trivyignores: .trivyignore
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
 
   #############################################################################
   # Stage 2: Unit Tests
@@ -128,7 +121,7 @@ jobs:
   go-tests-unit:
     name: Go Unit Tests
     runs-on: ubuntu-latest
-    needs: [terraform-fmt, terraform-validate, tflint, tfsec]
+    needs: [terraform-fmt, terraform-validate, tflint, trivy]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -244,7 +237,7 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [terraform-fmt, terraform-validate, tflint, tfsec, trivy, go-tests-unit, integration-tests]
+    needs: [terraform-fmt, terraform-validate, tflint, trivy, go-tests-unit, integration-tests]
     if: always()
     steps:
       - name: Check all jobs
@@ -253,7 +246,6 @@ jobs:
           echo "  - terraform-fmt: ${{ needs.terraform-fmt.result }}"
           echo "  - terraform-validate: ${{ needs.terraform-validate.result }}"
           echo "  - tflint: ${{ needs.tflint.result }}"
-          echo "  - tfsec: ${{ needs.tfsec.result }}"
           echo "  - trivy: ${{ needs.trivy.result }}"
           echo ""
           echo "Test Results:"
@@ -264,7 +256,7 @@ jobs:
           if [[ "${{ needs.terraform-fmt.result }}" == "failure" ]] || \
              [[ "${{ needs.terraform-validate.result }}" == "failure" ]] || \
              [[ "${{ needs.tflint.result }}" == "failure" ]] || \
-             [[ "${{ needs.tfsec.result }}" == "failure" ]] || \
+             [[ "${{ needs.trivy.result }}" == "failure" ]] || \
              [[ "${{ needs.go-tests-unit.result }}" == "failure" ]]; then
             echo "One or more required jobs failed"
             exit 1

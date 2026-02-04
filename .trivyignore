@@ -1,0 +1,15 @@
+# Trivy ignore file for infrastructure scanning
+# https://aquasecurity.github.io/trivy/latest/docs/configuration/filtering/
+
+# EKS endpoint public access - expected for testing
+# In production, restrict or disable public access
+AVD-AWS-0039
+AVD-AWS-0041
+
+# Secrets encryption - may not have KMS key for tests
+# In production, enable secrets encryption with KMS
+AVD-AWS-0037
+
+# These should never be ignored
+# AVD-AWS-0057  # IAM policy wildcards
+# AVD-AWS-0102  # VPC security group allows ingress from 0.0.0.0/0

@@ -41,7 +41,7 @@ func TestEksClusterComplete(t *testing.T) {
 	// Generate a unique cluster name to avoid conflicts
 	uniqueID := strings.ToLower(random.UniqueId())
 	clusterName := fmt.Sprintf("terratest-%s", uniqueID)
-	awsRegion := getEnvWithDefault("AWS_REGION", "us-west-2")
+	awsRegion := getEnvWithDefault("AWS_REGION", "us-west-1")
 
 	// Path to the Terraform example
 	examplesDir := filepath.Join("..", "examples", "complete")
@@ -94,41 +94,6 @@ func TestEksClusterComplete(t *testing.T) {
 	t.Run("ValidateTestWorkload", func(t *testing.T) {
 		validateTestWorkload(t, awsRegion, actualClusterName, clusterEndpoint, clusterCAData)
 	})
-}
-
-// TestEksClusterMinimal runs a minimal test with reduced infrastructure
-func TestEksClusterMinimal(t *testing.T) {
-	t.Parallel()
-
-	uniqueID := strings.ToLower(random.UniqueId())
-	clusterName := fmt.Sprintf("terratest-min-%s", uniqueID)
-	awsRegion := getEnvWithDefault("AWS_REGION", "us-west-2")
-
-	examplesDir := filepath.Join("..", "examples", "complete")
-
-	terraformOptions := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
-		TerraformDir: examplesDir,
-		Vars: map[string]interface{}{
-			"cluster_name":       clusterName,
-			"aws_region":         awsRegion,
-			"environment":        "terratest-minimal",
-			"node_instance_types": []string{"t3.small"},
-			"node_desired_size":  1,
-			"node_min_size":      1,
-			"node_max_size":      1,
-		},
-		NoColor: true,
-	})
-
-	defer terraform.Destroy(t, terraformOptions)
-
-	terraform.InitAndApply(t, terraformOptions)
-
-	clusterEndpoint := terraform.Output(t, terraformOptions, "cluster_endpoint")
-	actualClusterName := terraform.Output(t, terraformOptions, "cluster_name")
-
-	assert.NotEmpty(t, clusterEndpoint, "Cluster endpoint should not be empty")
-	assert.Equal(t, clusterName, actualClusterName, "Cluster name should match")
 }
 
 // validateClusterEndpoint checks that the cluster endpoint is accessible

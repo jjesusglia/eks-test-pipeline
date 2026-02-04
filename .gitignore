@@ -1,5 +1,26 @@
-.terraform.*
 .claude
-docs
 .Claude.md
+
+# Trivy
 trivy-results.json
+
+# Terraform
+.terraform
+# Ignore dependency-lock files until renovate can handle these files.
+# See https://github.com/renovatebot/renovate/issues/7895
+.terraform.lock.hcl
+
+# Ignore local Terraform state
+.terraform.tfstate.lock.info
+terraform.tfstate
+terraform.tfstate.backup
+terraform.tfstate.*.backup
+
+# Python virtualenv
+.venv
+
+**/__pycache__/*
+.aider*
+
+# IDE
+.idea

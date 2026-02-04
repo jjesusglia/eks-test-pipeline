@@ -27,11 +27,11 @@ import (
 )
 
 const (
-	testTimeout        = 30 * time.Minute
-	nodeReadyTimeout   = 10 * time.Minute
-	podReadyTimeout    = 5 * time.Minute
-	retryInterval      = 30 * time.Second
-	maxRetries         = 20
+	testTimeout       = 30 * time.Minute
+	nodeReadyTimeout  = 10 * time.Minute
+	podReadyTimeout   = 5 * time.Minute
+	fastRetryInterval = 10 * time.Second // Faster checks after terraform apply succeeds
+	maxRetries        = 30               // More retries to compensate for shorter intervals
 )
 
 // TestEksClusterComplete runs a full integration test deploying VPC and EKS
@@ -52,15 +52,16 @@ func TestEksClusterComplete(t *testing.T) {
 	terraformOptions := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
 		TerraformDir: examplesDir,
 		Vars: map[string]interface{}{
-			"cluster_name":       clusterName,
-			"aws_region":         awsRegion,
-			"environment":        "terratest",
-			"node_instance_types": []string{"t3.medium"},
-			"node_desired_size":  2,
-			"node_min_size":      1,
-			"node_max_size":      3,
+			"cluster_name":        clusterName,
+			"aws_region":          awsRegion,
+			"environment":         "terratest",
+			"node_instance_types": []string{"t3.small"}, // Smaller instance sufficient for tests
+			"node_desired_size":   1,                    // Single node speeds up readiness
+			"node_min_size":       1,
+			"node_max_size":       1,
 		},
-		NoColor: true,
+		NoColor:     true,
+		Parallelism: 20, // Higher parallelism for faster VPC resource creation
 	})
 
 	// Ensure cleanup happens regardless of test outcome
@@ -90,12 +91,15 @@ func TestEksClusterComplete(t *testing.T) {
 		validateClusterWithAWSSdk(t, awsRegion, actualClusterName)
 	})
 
+	// Create Kubernetes client once for all k8s-based validations (avoids duplicate IAM token generation)
+	clientset := getKubernetesClient(t, awsRegion, actualClusterName, clusterEndpoint, clusterCAData)
+
 	t.Run("ValidateNodesReady", func(t *testing.T) {
-		validateNodesReady(t, awsRegion, actualClusterName, clusterEndpoint, clusterCAData)
+		validateNodesReadyWithClient(t, clientset)
 	})
 
 	t.Run("ValidateTestWorkload", func(t *testing.T) {
-		validateTestWorkload(t, awsRegion, actualClusterName, clusterEndpoint, clusterCAData)
+		validateTestWorkloadWithClient(t, clientset)
 	})
 }
 
@@ -117,7 +121,7 @@ func validateClusterWithAWSSdk(t *testing.T, region, clusterName string) {
 
 	eksSvc := eks.New(sess)
 
-	_, err = retry.DoWithRetryE(t, "Describe EKS cluster", maxRetries, retryInterval, func() (string, error) {
+	_, err = retry.DoWithRetryE(t, "Describe EKS cluster", maxRetries, fastRetryInterval, func() (string, error) {
 		result, err := eksSvc.DescribeCluster(&eks.DescribeClusterInput{
 			Name: aws.String(clusterName),
 		})
@@ -136,11 +140,9 @@ func validateClusterWithAWSSdk(t *testing.T, region, clusterName string) {
 	require.NoError(t, err, "Cluster should be in ACTIVE state")
 }
 
-// validateNodesReady checks that worker nodes are ready
-func validateNodesReady(t *testing.T, region, clusterName, endpoint, caData string) {
-	clientset := getKubernetesClient(t, region, clusterName, endpoint, caData)
-
-	_, err := retry.DoWithRetryE(t, "Wait for nodes to be ready", maxRetries, retryInterval, func() (string, error) {
+// validateNodesReadyWithClient checks that worker nodes are ready using a pre-created client
+func validateNodesReadyWithClient(t *testing.T, clientset *kubernetes.Clientset) {
+	_, err := retry.DoWithRetryE(t, "Wait for nodes to be ready", maxRetries, fastRetryInterval, func() (string, error) {
 		nodes, err := clientset.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
 		if err != nil {
 			return "", fmt.Errorf("failed to list nodes: %w", err)
@@ -170,10 +172,8 @@ func validateNodesReady(t *testing.T, region, clusterName, endpoint, caData stri
 	require.NoError(t, err, "At least one node should be ready")
 }
 
-// validateTestWorkload deploys a test pod and validates it runs successfully
-func validateTestWorkload(t *testing.T, region, clusterName, endpoint, caData string) {
-	clientset := getKubernetesClient(t, region, clusterName, endpoint, caData)
-
+// validateTestWorkloadWithClient deploys a test pod and validates it runs successfully using a pre-created client
+func validateTestWorkloadWithClient(t *testing.T, clientset *kubernetes.Clientset) {
 	namespace := "default"
 	podName := fmt.Sprintf("terratest-pod-%s", strings.ToLower(random.UniqueId()))
 
@@ -183,15 +183,15 @@ func validateTestWorkload(t *testing.T, region, clusterName, endpoint, caData st
 			Name:      podName,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"app":     "terratest",
-				"test":    "true",
+				"app":  "terratest",
+				"test": "true",
 			},
 		},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
 				{
-					Name:    "nginx",
-					Image:   "nginx:alpine",
+					Name:  "nginx",
+					Image: "nginx:alpine",
 					Ports: []corev1.ContainerPort{
 						{
 							ContainerPort: 80,
@@ -223,7 +223,7 @@ func validateTestWorkload(t *testing.T, region, clusterName, endpoint, caData st
 	}()
 
 	// Wait for pod to be running
-	_, err = retry.DoWithRetryE(t, "Wait for pod to be running", maxRetries, retryInterval, func() (string, error) {
+	_, err = retry.DoWithRetryE(t, "Wait for pod to be running", maxRetries, fastRetryInterval, func() (string, error) {
 		p, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), podName, metav1.GetOptions{})
 		if err != nil {
 			return "", fmt.Errorf("failed to get pod: %w", err)

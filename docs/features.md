@@ -72,3 +72,42 @@
 - OIDC authentication (no long-lived AWS keys)
 - Artifact upload on failure for debugging
 - Resource tagging for identification
+
+---
+
+## Feature Log
+
+### 2026-02-05: Integration Test Speed Optimization
+
+**Title**: Optimize Terratest Integration Test Speed
+
+**Summary**: Reduced integration test execution time from ~25-35 minutes to ~18-27 minutes through multiple optimizations targeting retry intervals, node count, Terraform parallelism, and Kubernetes client caching.
+
+**Implementation Details**:
+
+1. **Faster Retry Intervals** (`test/integration/eks_cluster_test.go:29-35`)
+   - Changed `retryInterval` from 30s to 10s (`fastRetryInterval`)
+   - Increased `maxRetries` from 20 to 30 to compensate
+   - Applied to all `retry.DoWithRetryE` calls (cluster status, node ready, pod ready)
+   - Time saved: ~1-2 minutes
+
+2. **Reduced Node Count** (`test/integration/eks_cluster_test.go:54-65`)
+   - Changed `node_desired_size` from 2 to 1
+   - Changed `node_max_size` from 3 to 1
+   - Changed instance type from `t3.medium` to `t3.small`
+   - Single node sufficient for validating cluster functionality
+   - Time saved: ~2-4 minutes
+
+3. **Terraform Parallelism** (`test/integration/eks_cluster_test.go:64`)
+   - Added `Parallelism: 20` to terraform options (default is 10)
+   - Speeds up VPC resource creation (subnets, route tables, NAT gateway)
+   - Time saved: ~30-60 seconds
+
+4. **Kubernetes Client Caching** (`test/integration/eks_cluster_test.go:94-103`)
+   - Create client once before k8s-based sub-tests
+   - Refactored `validateNodesReady` → `validateNodesReadyWithClient`
+   - Refactored `validateTestWorkload` → `validateTestWorkloadWithClient`
+   - Eliminates duplicate IAM token generation and TLS connection setup
+   - Time saved: ~10-15 seconds
+
+**Total Estimated Savings**: 5-8 minutes per test run

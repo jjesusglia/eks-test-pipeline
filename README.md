@@ -90,10 +90,9 @@ terratest/
 
 | Command | Purpose | AWS Resources |
 |---------|---------|---------------|
-| `task test-unit` | Unit tests only | None |
-| `task test-integration-minimal` | Minimal integration test | VPC + EKS (1 node) |
-| `task test-integration-complete` | Full integration test | VPC + EKS (2 nodes) |
-| `task test` | All checks + unit tests | None |
+| `task test-unit` | Go unit tests (skips integration) | None |
+| `task test-integration` | Full Terratest deployment | VPC + EKS (2 nodes) |
+| `task test` | Static analysis + unit tests | None |
 | `task test-all` | Everything including integration | Yes |
 
 ### Utilities

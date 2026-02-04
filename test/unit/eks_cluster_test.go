@@ -36,6 +36,9 @@ const (
 
 // TestEksClusterComplete runs a full integration test deploying VPC and EKS
 func TestEksClusterComplete(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	// Generate a unique cluster name to avoid conflicts
@@ -248,7 +251,7 @@ func getKubernetesClient(t *testing.T, region, clusterName, endpoint, caData str
 		Region:    region,
 	}
 
-	tok, err := gen.GetWithOptions(opts)
+	tok, err := gen.GetWithOptions(context.Background(), opts)
 	require.NoError(t, err, "Failed to get token")
 
 	// Create Kubernetes client config

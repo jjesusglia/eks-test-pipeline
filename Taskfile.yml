@@ -73,7 +73,7 @@ tasks:
   ##############################################################################
 
   test-unit:
-    desc: "Run Go unit tests (short)"
+    desc: "Run Go unit tests (skips integration, no AWS)"
     cmds:
       - cd test && go test -v -short -timeout 5m ./...
 

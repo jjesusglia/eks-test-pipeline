@@ -62,30 +62,101 @@ trivy config . --severity CRITICAL,HIGH,MEDIUM
 
 ### Purpose
 
-Test Go helper functions without deploying infrastructure.
+Validate configuration logic and constraints **without deploying infrastructure**.
 
-### What's Tested
+### Types of Unit Tests
 
+#### 1. Terraform Native Tests (Primary)
+
+Fast validation tests using Terraform's built-in test framework with mock providers.
+
+**Location**: `modules/eks-cluster/tests/*.tftest.hcl`
+
+**What's Tested**:
+- Variable validation
+- Default values
+- Configuration constraints
+- Resource attributes
+- Output values
+
+**Example**:
+```hcl
+run "validate_required_variables" {
+  command = plan
+
+  assert {
+    condition     = length(var.subnet_ids) >= 2
+    error_message = "At least 2 subnets required for HA"
+  }
+}
+```
+
+**Running**:
+```bash
+# Via Task
+task test-terraform
+
+# Direct
+cd modules/eks-cluster
+terraform test
+```
+
+#### 2. Go Unit Tests (For Helper Functions)
+
+Only needed if you have Go helper functions or validation logic.
+
+**Location**: `test/*_test.go`
+
+**What's Tested**:
 - Configuration parsing
 - Helper functions
-- Mocked behavior
+- Utility logic
 
-### Running Locally
-
+**Running**:
 ```bash
+# Via Task
+task test-go-unit
+
+# Direct
 cd test
 go test -v -short -timeout 5m ./...
 ```
 
+### Running All Unit Tests
+
+```bash
+# Runs both Terraform and Go unit tests
+task test-unit
+```
+
 ### Writing Unit Tests
+
+#### Terraform Tests
+
+Use `terraform test` with assertions:
+
+```hcl
+variables {
+  cluster_name = "test"
+  vpc_id       = "vpc-12345"
+  subnet_ids   = ["subnet-1", "subnet-2"]
+}
+
+run "test_name" {
+  command = plan  # or apply with mock providers
+
+  assert {
+    condition     = var.cluster_name != ""
+    error_message = "Cluster name required"
+  }
+}
+```
+
+#### Go Tests with Skip
 
 Use the `-short` flag to skip integration tests:
 
 ```go
-func TestHelperFunction(t *testing.T) {
-    // Unit test code - runs always
-}
-
 func TestEksCluster(t *testing.T) {
     if testing.Short() {
         t.Skip("Skipping integration test in short mode")

@@ -8,12 +8,13 @@ data "aws_availability_zones" "available" {
 
 locals {
   name = var.cluster_name
-  azs  = slice(data.aws_availability_zones.available.names, 0, 3)
+  azs  = slice(data.aws_availability_zones.available.names, 0, 2)
 
   tags = {
     Environment = var.environment
     Terraform   = "true"
-    Test        = "terratest"
+    Test        = "true"
+    Owned       = "terratest"
   }
 }
 
@@ -78,8 +79,9 @@ module "eks" {
   }
 
   eks_managed_node_group_defaults = {
-    ami_type       = "AL2023_x86_64_STANDARD"
-    instance_types = var.node_instance_types
+    ami_type                 = "AL2023_x86_64_STANDARD"
+    instance_types           = var.node_instance_types
+    iam_role_use_name_prefix = false
   }
 
   eks_managed_node_groups = {

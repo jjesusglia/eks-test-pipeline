@@ -123,8 +123,8 @@ jobs:
   # Stage 2: Unit Tests
   #############################################################################
 
-  go-tests-unit:
-    name: Go Unit Tests
+  tests-unit:
+    name: Unit Tests
     runs-on: ubuntu-latest
     needs: [terraform-fmt, terraform-validate, tflint, trivy]
     steps:
@@ -152,9 +152,9 @@ jobs:
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
-    needs: [go-tests-unit]
-    # Only run on main branch or when explicitly requested
-    if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
+    needs: [tests-unit]
+    # Only run on master branch or when explicitly requested
+    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
     timeout-minutes: 45
 
     steps:
@@ -242,7 +242,7 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [terraform-fmt, terraform-validate, tflint, trivy, go-tests-unit, integration-tests]
+    needs: [terraform-fmt, terraform-validate, tflint, trivy, tests-unit, integration-tests]
     if: always()
     steps:
       - name: Check all jobs
@@ -254,7 +254,7 @@ jobs:
           echo "  - trivy: ${{ needs.trivy.result }}"
           echo ""
           echo "Test Results:"
-          echo "  - go-tests-unit: ${{ needs.go-tests-unit.result }}"
+          echo "  - tests-unit: ${{ needs.tests-unit.result }}"
           echo "  - integration-tests: ${{ needs.integration-tests.result }}"
 
           # Fail if any required job failed
@@ -262,7 +262,7 @@ jobs:
              [[ "${{ needs.terraform-validate.result }}" == "failure" ]] || \
              [[ "${{ needs.tflint.result }}" == "failure" ]] || \
              [[ "${{ needs.trivy.result }}" == "failure" ]] || \
-             [[ "${{ needs.go-tests-unit.result }}" == "failure" ]]; then
+             [[ "${{ needs.tests-unit.result }}" == "failure" ]]; then
             echo "One or more required jobs failed"
             exit 1
           fi

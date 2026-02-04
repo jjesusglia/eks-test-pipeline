@@ -69,53 +69,51 @@ tasks:
       - task fmt-fix
 
   ##############################################################################
-  # Unit Tests
+  # Unit Tests (Fast, No AWS)
   ##############################################################################
 
   test-unit:
-    desc: "Run Go unit tests (skips integration, no AWS)"
+    desc: "Run unit tests (validation, helpers - no AWS)"
     cmds:
-      - cd test && go test -v -short -timeout 5m ./...
+      - cd test && go test -v ./unit/...
 
   test-unit-coverage:
     desc: "Run unit tests with coverage report"
     cmds:
-      - cd test && go test -v -short -timeout 5m -cover ./...
+      - cd test && go test -v -cover -coverprofile=coverage.out ./unit/...
+      - cd test && go tool cover -html=coverage.out -o coverage.html
+      - echo "Coverage report saved to test/coverage.html"
 
   ##############################################################################
-  # Integration Tests
+  # Integration Tests (Slow, Real AWS - E2E/Smoke)
   ##############################################################################
 
   test-integration:
-    desc: "Run integration tests (deploys to AWS)"
-    prompt: "This will deploy real AWS resources. Continue?"
+    desc: "Run integration tests (deploys real EKS to AWS)"
+    prompt: "This will deploy real AWS resources (~$0.20, 25 min). Continue?"
     cmds:
-      - cd test && go test -v -timeout 40m ./...
+      - cd test && go test -v -timeout 40m ./integration/...
     env:
       AWS_REGION: "{{.AWS_REGION}}"
 
-  test-integration-complete:
-    desc: "Run complete integration test only"
-    prompt: "This will deploy real AWS resources. Continue?"
+  test-smoke:
+    desc: "Alias for test-integration (smoke tests)"
+    prompt: "This will deploy real AWS resources (~$0.20, 25 min). Continue?"
     cmds:
-      - cd test && go test -v -timeout 40m -run TestEksClusterComplete ./...
-    env:
-      AWS_REGION: "{{.AWS_REGION}}"
+      - task: test-integration
 
-  test-integration-minimal:
-    desc: "Run minimal integration test (faster, cheaper)"
-    prompt: "This will deploy real AWS resources. Continue?"
+  test-e2e:
+    desc: "Alias for test-integration (end-to-end tests)"
+    prompt: "This will deploy real AWS resources (~$0.20, 25 min). Continue?"
     cmds:
-      - cd test && go test -v -timeout 30m -run TestEksClusterMinimal ./...
-    env:
-      AWS_REGION: "{{.AWS_REGION}}"
+      - task: test-integration
 
   ##############################################################################
   # Combined Test Suites
   ##############################################################################
 
   test:
-    desc: "Run all tests (lint + unit tests)"
+    desc: "Run local tests (lint + unit tests)"
     cmds:
       - task: lint
       - task: test-unit

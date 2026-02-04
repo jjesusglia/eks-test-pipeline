@@ -62,114 +62,120 @@ trivy config . --severity CRITICAL,HIGH,MEDIUM
 
 ### Purpose
 
-Validate configuration logic and constraints **without deploying infrastructure**.
+Fast validation of helper functions and logic **without deploying infrastructure**.
 
-### Types of Unit Tests
+**Speed**: ~3 seconds for 48 tests
+**Cost**: $0 (no AWS resources)
+**When**: Every commit, pre-commit hooks, CI pipeline
 
-#### 1. Terraform Native Tests (Primary)
+### Structure
 
-Fast validation tests using Terraform's built-in test framework with mock providers.
-
-**Location**: `modules/eks-cluster/tests/*.tftest.hcl`
-
-**What's Tested**:
-- Variable validation
-- Default values
-- Configuration constraints
-- Resource attributes
-- Output values
-
-**Example**:
-```hcl
-run "validate_required_variables" {
-  command = plan
-
-  assert {
-    condition     = length(var.subnet_ids) >= 2
-    error_message = "At least 2 subnets required for HA"
-  }
-}
+```
+test/
+├── unit/                    # Pure unit tests (FAST)
+│   ├── validation.go        # Helper functions
+│   └── validation_test.go   # Unit tests (48 tests)
+└── integration/             # E2E tests (SLOW)
+    └── eks_cluster_test.go  # Terratest integration
 ```
 
-**Running**:
+### What's Tested
+
+**Location**: `test/unit/`
+
+**Functions tested**:
+1. `ValidateClusterName()` - EKS cluster name validation
+2. `ValidateKubernetesVersion()` - Version format check
+3. `ValidateSubnetCount()` - Minimum subnet requirements
+4. `ValidateTags()` - Required tags validation
+5. `ValidateInstanceTypes()` - EC2 instance type format
+6. `GenerateClusterTags()` - Tag merging logic
+7. `ValidateNodeGroupSize()` - Min/max/desired validation
+
+**Test coverage**: 48 test cases
+
+### Running Unit Tests
+
 ```bash
-# Via Task
-task test-terraform
+# Via Task (recommended)
+task test-unit
 
-# Direct
-cd modules/eks-cluster
-terraform test
-```
-
-#### 2. Go Unit Tests (For Helper Functions)
-
-Only needed if you have Go helper functions or validation logic.
-
-**Location**: `test/*_test.go`
-
-**What's Tested**:
-- Configuration parsing
-- Helper functions
-- Utility logic
-
-**Running**:
-```bash
-# Via Task
-task test-go-unit
+# With coverage report
+task test-unit-coverage
+open test/coverage.html
 
 # Direct
 cd test
-go test -v -short -timeout 5m ./...
+go test -v ./unit/...
 ```
 
-### Running All Unit Tests
-
-```bash
-# Runs both Terraform and Go unit tests
-task test-unit
-```
-
-### Writing Unit Tests
-
-#### Terraform Tests
-
-Use `terraform test` with assertions:
-
-```hcl
-variables {
-  cluster_name = "test"
-  vpc_id       = "vpc-12345"
-  subnet_ids   = ["subnet-1", "subnet-2"]
-}
-
-run "test_name" {
-  command = plan  # or apply with mock providers
-
-  assert {
-    condition     = var.cluster_name != ""
-    error_message = "Cluster name required"
-  }
-}
-```
-
-#### Go Tests with Skip
-
-Use the `-short` flag to skip integration tests:
+### Example Unit Test
 
 ```go
-func TestEksCluster(t *testing.T) {
-    if testing.Short() {
-        t.Skip("Skipping integration test in short mode")
+func TestValidateClusterName(t *testing.T) {
+    tests := []struct {
+        name      string
+        input     string
+        wantError bool
+    }{
+        {"valid name", "my-cluster", false},
+        {"empty name", "", true},
+        {"name too long", string(make([]byte, 101)), true},
     }
-    // Integration test code
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            err := ValidateClusterName(tt.input)
+            if tt.wantError {
+                assert.Error(t, err)
+            } else {
+                assert.NoError(t, err)
+            }
+        })
+    }
 }
 ```
 
-## Integration Tests
+### Adding New Unit Tests
+
+1. Add helper function to `test/unit/validation.go`
+2. Add tests to `test/unit/validation_test.go`
+3. Run `task test-unit` to verify
+
+Example:
+```go
+// In validation.go
+func ValidateClusterName(name string) error {
+    if name == "" {
+        return fmt.Errorf("cluster name cannot be empty")
+    }
+    return nil
+}
+
+// In validation_test.go
+func TestValidateClusterName(t *testing.T) {
+    err := ValidateClusterName("")
+    assert.Error(t, err)
+}
+
+## Integration Tests (E2E/Smoke)
 
 ### Purpose
 
-Validate the module works in a real AWS environment.
+Validate the module works in a real AWS environment with actual resource deployment.
+
+**Speed**: ~25 minutes
+**Cost**: ~$0.20 per run
+**When**: Before releases, on main branch, explicit PR requests
+
+### Structure
+
+```
+test/
+├── unit/                    # Unit tests (FAST)
+└── integration/             # Integration/E2E/Smoke (SLOW)
+    └── eks_cluster_test.go  # Full deployment test
+```
 
 ### Test Cases
 

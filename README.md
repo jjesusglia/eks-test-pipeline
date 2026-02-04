@@ -31,17 +31,21 @@ This runs:
 # Show all available tasks
 task --list
 
-# Run all checks (format, validate, lint, unit tests)
-task test
+# Quick feedback loop (no AWS, ~3 seconds)
+task test-unit              # Pure unit tests (validation, helpers)
 
-# Run only unit tests (no AWS resources)
-task test-unit
+# Complete local validation (no AWS, ~3 minutes)
+task test                   # Static analysis + unit tests
 
-# Run integration tests (deploys to AWS)
-task test-integration-minimal  # Single small node (faster/cheaper)
-task test-integration-complete # Full deployment with 2 nodes
+# Integration/E2E tests (real AWS, ~25 min, ~$0.20)
+task test-integration       # Full deployment with validation
+task test-smoke             # Alias for integration tests
+task test-e2e               # Alias for integration tests
 
-# Run individual checks
+# Run everything
+task test-all               # Static + unit + integration
+
+# Individual checks
 task fmt           # Check formatting
 task fmt-fix       # Fix formatting
 task validate      # Validate Terraform
@@ -88,12 +92,14 @@ terratest/
 
 ### Testing
 
-| Command | Purpose | AWS Resources |
-|---------|---------|---------------|
-| `task test-unit` | Go unit tests (skips integration) | None |
-| `task test-integration` | Full Terratest deployment | VPC + EKS (2 nodes) |
-| `task test` | Static analysis + unit tests | None |
-| `task test-all` | Everything including integration | Yes |
+| Command | Purpose | Time | AWS | Cost |
+|---------|---------|------|-----|------|
+| `task test-unit` | Pure unit tests (48 tests) | ~3s | No | $0 |
+| `task test` | Static + unit tests | ~3min | No | $0 |
+| `task test-integration` | E2E/smoke tests (real deployment) | ~25min | Yes | ~$0.20 |
+| `task test-e2e` | Alias for integration | ~25min | Yes | ~$0.20 |
+| `task test-smoke` | Alias for integration | ~25min | Yes | ~$0.20 |
+| `task test-all` | Everything (static + unit + integration) | ~30min | Yes | ~$0.20 |
 
 ### Utilities
 

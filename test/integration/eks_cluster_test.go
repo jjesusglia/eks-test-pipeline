@@ -47,7 +47,7 @@ func TestEksClusterComplete(t *testing.T) {
 	awsRegion := getEnvWithDefault("AWS_REGION", "us-west-1")
 
 	// Path to the Terraform example
-	examplesDir := filepath.Join("..", "examples", "complete")
+	examplesDir := filepath.Join("../..", "examples", "complete")
 
 	terraformOptions := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
 		TerraformDir: examplesDir,

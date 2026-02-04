@@ -18,6 +18,7 @@ env:
   GO_VERSION: "1.21"
   AWS_REGION: "us-west-1"
   TFLINT_VERSION: "v0.50.3"
+  AWS_ROLE_ARN: "arn:aws:iam::078963965848:role/joaoj-eks-test-pipeline"  # Replace with your OIDC role ARN
 
 permissions:
   id-token: write  # Required for OIDC
@@ -164,7 +165,7 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
           role-session-name: terratest-eks-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
@@ -216,7 +217,7 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
           role-session-name: terratest-cleanup-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 

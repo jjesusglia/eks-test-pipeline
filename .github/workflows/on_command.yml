@@ -1,0 +1,12 @@
+name: Tests on Command
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  tests-on-command:
+    if: github.event.issue.pull_request && github.event.comment.body == '!tests'
+    uses: ./.github/workflows/test.yml
+    with:
+      run_integration_tests: true

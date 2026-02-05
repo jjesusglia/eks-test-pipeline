@@ -65,11 +65,7 @@ terratest/
 │   └── eks_cluster_test.go        # Integration tests
 ├── .github/workflows/
 │   └── test.yml                   # GitHub Actions pipeline
-├── docs/
-│   ├── features.md                # Features overview
-│   ├── architecture.md            # Architecture decisions
-│   ├── testing-strategy.md        # Testing approach
-│   └── security.md                # Security considerations
+├── docs/                          # Project documentation
 ├── .tflint.hcl                    # TFLint config
 ├── .trivyignore                   # Trivy exceptions
 ├── Taskfile.yml                   # Task automation
@@ -112,22 +108,6 @@ terratest/
 | `task cleanup-aws` | List orphaned AWS resources |
 | `task version-check` | Verify tool versions |
 | `task ci` | Run CI pipeline locally |
-
-## Documentation
-
-- **[Features](docs/features.md)** - Module features and test pipeline
-- **[Architecture](docs/architecture.md)** - System design and data flow
-- **[Testing Strategy](docs/testing-strategy.md)** - Test approach and debugging
-- **[Security](docs/security.md)** - Security considerations and setup
-
-View documentation:
-
-```bash
-task docs-features
-task docs-architecture
-task docs-testing
-task docs-security
-```
 
 ## GitHub Actions Setup
 
@@ -282,7 +262,7 @@ task watch
 
 1. Format code: `task fmt-fix`
 2. Run tests: `task test`
-3. Add feature docs to `docs/features.md`
+3. Add feature docs to `docs/`
 4. Update architecture if needed
 
 ## Tools
@@ -297,10 +277,3 @@ task watch
 ## License
 
 See LICENSE file for details.
-
-## Support
-
-- Issues: Check docs and existing issues
-- Security: Review `docs/security.md`
-- Architecture: Review `docs/architecture.md`
-- Testing: Review `docs/testing-strategy.md`

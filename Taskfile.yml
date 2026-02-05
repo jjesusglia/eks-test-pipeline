@@ -204,36 +204,6 @@ tasks:
       - task: test-unit
 
   ##############################################################################
-  # Documentation Tasks
-  ##############################################################################
-
-  docs:
-    desc: "Show documentation"
-    cmds:
-      - echo "📚 Documentation Files:"
-      - ls -lah docs/
-
-  docs-features:
-    desc: "Show features documentation"
-    cmds:
-      - cat docs/features.md
-
-  docs-architecture:
-    desc: "Show architecture documentation"
-    cmds:
-      - cat docs/architecture.md
-
-  docs-testing:
-    desc: "Show testing strategy documentation"
-    cmds:
-      - cat docs/testing-strategy.md
-
-  docs-security:
-    desc: "Show security documentation"
-    cmds:
-      - cat docs/security.md
-
-  ##############################################################################
   # Debug Tasks
   ##############################################################################
 

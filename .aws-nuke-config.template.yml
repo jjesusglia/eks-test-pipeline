@@ -1,0 +1,24 @@
+---
+regions:
+  - us-west-1
+
+blocklist-terms:
+  - "prod"
+  - "production"
+  - "staging"
+  - "beta"
+  - "acceptance"
+  - "live"
+  - "dev"
+
+blocklist:
+  - "662491802882"
+  - "951861692570"
+
+accounts:
+  "078963965848":
+    filters:
+      __global__:
+        - type: tag
+          key: GitHubRunID
+          value: "PLACEHOLDER_RUN_ID"

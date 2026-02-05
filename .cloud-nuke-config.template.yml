@@ -1,0 +1,438 @@
+---
+# cloud-nuke config - only deletes resources tagged with matching GitHubRunID
+# Runs against the currently authenticated AWS account (no account ID needed
+
+ACM:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+AMI:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+APIGateway:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+APIGatewayV2:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+AccessAnalyzer:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+AutoScalingGroup:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+AppRunnerService:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+BackupVault:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+CloudWatchAlarm:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+CloudWatchDashboard:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+CloudWatchLogGroup:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+CloudtrailTrail:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+CloudMapNamespace:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+CloudMapService:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+CodeDeployApplications:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+DataSyncTask:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+DynamoDB:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EBSVolume:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+ElasticBeanstalk:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EC2:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EC2DedicatedHosts:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EC2KeyPairs:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EC2IPAM:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EC2IPAMPool:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EC2IPAMResourceDiscovery:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EC2IPAMScope:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EC2PlacementGroups:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EC2Subnet:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EC2Endpoint:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+ECRRepository:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+ECSCluster:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+ECSService:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EKSCluster:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+ELBv1:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+ELBv2:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+ElasticFileSystem:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+ElasticIP:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+Elasticache:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+ElasticCacheServerless:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EventBridge:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EventBridgeArchive:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EventBridgeRule:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EventBridgeSchedule:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EventBridgeScheduleGroup:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+Grafana:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+IAMGroups:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+IAMPolicies:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+IAMRoles:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+IAMUsers:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+InternetGateway:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+EgressOnlyInternetGateway:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+KinesisStream:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+KinesisFirehose:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+KMSCustomerKeys:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+LambdaFunction:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+LaunchConfiguration:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+LaunchTemplate:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+MSKCluster:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+ManagedPrometheus:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+NatGateway:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+NetworkACL:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+NetworkInterface:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+OpenSearchDomain:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+Redshift:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+DBClusters:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+DBInstances:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+RDSProxy:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+s3:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+S3MultiRegionAccessPoint:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+SecurityGroup:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+SecretsManager:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+Snapshots:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+SNS:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+SQS:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+SageMakerNotebook:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+SageMakerEndpoint:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+TransitGateway:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+TransitGatewayRouteTable:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+TransitGatewaysVpcAttachment:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+VPC:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+NetworkFirewall:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+NetworkFirewallPolicy:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+NetworkFirewallRuleGroup:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+NetworkFirewallTLSConfig:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+VPCLatticeService:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+VPCLatticeServiceNetwork:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"
+
+VPCLatticeTargetGroup:
+  include:
+    tags:
+      GitHubRunID: "PLACEHOLDER_RUN_ID"

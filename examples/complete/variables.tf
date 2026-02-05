@@ -51,3 +51,9 @@ variable "node_max_size" {
   type        = number
   default     = 3
 }
+
+variable "github_run_id" {
+  description = "GitHub Actions run ID for tagging and cleanup"
+  type        = string
+  default     = "local-test"
+}

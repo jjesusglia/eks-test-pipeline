@@ -192,6 +192,7 @@ jobs:
         env:
           AWS_REGION: ${{ env.AWS_REGION }}
           TF_VAR_cluster_version: "1.29"
+          TF_VAR_github_run_id: "${{ github.run_id }}"
 
       - name: Upload test logs on failure
         if: failure()
@@ -221,20 +222,143 @@ jobs:
           role-session-name: terratest-cleanup-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Check for orphaned resources
+      - name: Cleanup orphaned resources
         run: |
-          echo "Checking for orphaned terratest resources..."
+          set +e
+          RUN_ID="${{ github.run_id }}"
 
-          # List EKS clusters with terratest prefix
-          aws eks list-clusters --query "clusters[?starts_with(@, 'terratest-')]" --output text
+          echo "========================================"
+          echo "Cleanup for GitHub Run: $RUN_ID"
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo "========================================"
 
-          # List VPCs with terratest tag
-          aws ec2 describe-vpcs \
-            --filters "Name=tag:Test,Values=terratest" \
+          # 1. Delete EKS Clusters
+          echo "Finding EKS clusters for this run..."
+          clusters=$(aws eks list-clusters --query "clusters[?starts_with(@, 'terratest-')]" --output text)
+
+          for cluster in $clusters; do
+            # Verify it's from this run
+            run_tag=$(aws eks describe-cluster --name "$cluster" --query "cluster.tags.GitHubRunID" --output text 2>/dev/null)
+
+            if [[ "$run_tag" == "$RUN_ID" ]]; then
+              echo "Deleting EKS cluster: $cluster"
+
+              # Delete node groups
+              nodegroups=$(aws eks list-nodegroups --cluster-name "$cluster" --query "nodegroups" --output text)
+              for ng in $nodegroups; do
+                echo "  Deleting node group: $ng"
+                aws eks delete-nodegroup --cluster-name "$cluster" --nodegroup-name "$ng" 2>/dev/null || true
+              done
+
+              # Delete add-ons
+              addons=$(aws eks list-addons --cluster-name "$cluster" --query "addons" --output text 2>/dev/null)
+              for addon in $addons; do
+                echo "  Deleting add-on: $addon"
+                aws eks delete-addon --cluster-name "$cluster" --addon-name "$addon" 2>/dev/null || true
+              done
+
+              # Delete cluster
+              aws eks delete-cluster --name "$cluster" 2>/dev/null || true
+
+              # Wait for deletion (max 30 iterations * 10s = 5 minutes)
+              echo "  Waiting for cluster deletion..."
+              for i in {1..30}; do
+                if ! aws eks describe-cluster --name "$cluster" 2>/dev/null | grep -q "ACTIVE"; then
+                  echo "  ✓ Cluster deleted"
+                  break
+                fi
+                sleep 10
+              done
+            fi
+          done
+
+          # 2. Delete VPCs and associated resources
+          echo "Finding VPCs for this run..."
+          vpcs=$(aws ec2 describe-vpcs \
+            --filters "Name=tag:GitHubRunID,Values=$RUN_ID" \
             --query "Vpcs[*].VpcId" \
-            --output text
+            --output text)
 
-          echo "If resources exist, they may need manual cleanup"
+          for vpc in $vpcs; do
+            echo "Cleaning up VPC: $vpc"
+
+            # Delete NAT Gateways
+            nats=$(aws ec2 describe-nat-gateways \
+              --filter "Name=vpc-id,Values=$vpc" \
+              --query "NatGateways[?State=='available'].NatGatewayId" \
+              --output text)
+
+            for nat in $nats; do
+              echo "  Deleting NAT Gateway: $nat"
+              aws ec2 delete-nat-gateway --nat-gateway-id "$nat" 2>/dev/null || true
+            done
+
+            # Wait for NAT deletion
+            sleep 5
+
+            # Release Elastic IPs
+            eips=$(aws ec2 describe-addresses \
+              --filter "Name=tag:GitHubRunID,Values=$RUN_ID" \
+              --query "Addresses[?AssociationId==null].AllocationId" \
+              --output text)
+
+            for eip in $eips; do
+              echo "  Releasing Elastic IP: $eip"
+              aws ec2 release-address --allocation-id "$eip" 2>/dev/null || true
+            done
+
+            # Delete Security Groups
+            sgs=$(aws ec2 describe-security-groups \
+              --filters "Name=vpc-id,Values=$vpc" \
+              --query "SecurityGroups[?GroupName!='default'].GroupId" \
+              --output text)
+
+            for sg in $sgs; do
+              echo "  Deleting Security Group: $sg"
+              aws ec2 delete-security-group --group-id "$sg" 2>/dev/null || true
+            done
+
+            # Delete Subnets
+            subnets=$(aws ec2 describe-subnets \
+              --filters "Name=vpc-id,Values=$vpc" \
+              --query "Subnets[*].SubnetId" \
+              --output text)
+
+            for subnet in $subnets; do
+              echo "  Deleting Subnet: $subnet"
+              aws ec2 delete-subnet --subnet-id "$subnet" 2>/dev/null || true
+            done
+
+            # Delete Internet Gateways
+            igws=$(aws ec2 describe-internet-gateways \
+              --filters "Name=attachment.vpc-id,Values=$vpc" \
+              --query "InternetGateways[*].InternetGatewayId" \
+              --output text)
+
+            for igw in $igws; do
+              echo "  Detaching Internet Gateway: $igw"
+              aws ec2 detach-internet-gateway --internet-gateway-id "$igw" --vpc-id "$vpc" 2>/dev/null || true
+              aws ec2 delete-internet-gateway --internet-gateway-id "$igw" 2>/dev/null || true
+            done
+
+            # Delete VPC
+            echo "  Deleting VPC: $vpc"
+            aws ec2 delete-vpc --vpc-id "$vpc" 2>/dev/null || true
+          done
+
+          # 3. Delete CloudWatch Log Groups
+          echo "Finding CloudWatch Log Groups for this run..."
+          log_groups=$(aws logs describe-log-groups \
+            --query "logGroups[?contains(logGroupName, 'terratest')].logGroupName" \
+            --output text)
+
+          for lg in $log_groups; do
+            echo "Deleting Log Group: $lg"
+            aws logs delete-log-group --log-group-name "$lg" 2>/dev/null || true
+          done
+
+          echo ""
+          echo "Cleanup completed for Run ID: $RUN_ID"
 
   #############################################################################
   # Summary job

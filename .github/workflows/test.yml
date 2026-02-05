@@ -212,8 +212,8 @@ jobs:
   cleanup:
     name: Cleanup AWS Resources (aws-nuke)
     runs-on: ubuntu-latest
-    needs: [integration-tests]
-    if: always() && needs.integration-tests.result != 'skipped'
+    #needs: [integration-tests]
+    #if: always() && needs.integration-tests.result != 'skipped'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -227,10 +227,12 @@ jobs:
 
       - name: Install aws-nuke
         run: |
-          wget -q https://github.com/rebuy-de/aws-nuke/releases/latest/download/aws-nuke-linux-amd64.tar.gz
-          tar -xzf aws-nuke-linux-amd64.tar.gz
+          wget -q "https://github.com/ekristen/aws-nuke/releases/download/${AWS_NUKE_VERSION}/aws-nuke-${AWS_NUKE_VERSION}-linux-amd64.tar.gz"
+          tar -xzf aws-nuke-${AWS_NUKE_VERSION}-linux-amd64.tar.gz
           sudo mv aws-nuke /usr/local/bin/
           aws-nuke version
+        env:
+          AWS_NUKE_VERSION: v3.51.1
 
       - name: Generate aws-nuke config
         run: |
@@ -239,7 +241,7 @@ jobs:
 
       - name: Run aws-nuke
         run: |
-          aws-nuke -c aws-nuke-config.yml --force --max-wait-retries 60
+          aws-nuke nuke -c aws-nuke-config.yml --no-alias-check
 
   #############################################################################
   # Summary job

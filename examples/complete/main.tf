@@ -15,6 +15,7 @@ locals {
     Terraform   = "true"
     Test        = "true"
     Owned       = "terratest"
+    GitHubRunID = var.github_run_id
   }
 }
 

@@ -1,3 +1,6 @@
+# REFERENCE IMPLEMENTATION: Replace this module with your own Terraform module.
+# This is a wrapper around terraform-aws-modules/eks/aws.
+
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 20.8"

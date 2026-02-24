@@ -14,14 +14,18 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # ===== CUSTOMIZE THESE FOR YOUR PROJECT =====
+  ENABLE_VERSION_TESTING: "true"
+  AWS_ROLE_ARN: "arn:aws:iam::078963965848:role/joaoj-eks-test-pipeline"
+  AWS_REGION: "us-west-1"
+  # ===== END CUSTOMIZATION =====
   TERRAFORM_VERSION: "1.6.6"
   GO_VERSION: "1.21"
-  AWS_REGION: "us-west-1"
   TFLINT_VERSION: "v0.50.3"
-  AWS_ROLE_ARN: "arn:aws:iam::078963965848:role/joaoj-eks-test-pipeline"  # Replace with your OIDC role ARN
+  MIN_EKS_VERSION: "1.31"
 
 permissions:
-  id-token: write  # Required for OIDC
+  id-token: write
   contents: read
   pull-requests: write
 
@@ -41,18 +45,26 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Terraform Format Check
-        run: terraform fmt -check -recursive -diff
-        continue-on-error: false
+        run: task fmt
 
   terraform-validate:
     name: Terraform Validate
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        # CUSTOMIZE: add or remove directories to validate
         directory:
           - modules/eks-cluster
           - examples/complete
+          - examples/vpc
+          - examples/eks
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -78,6 +90,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@v4
         with:
@@ -86,9 +109,8 @@ jobs:
       - name: Initialize TFLint
         run: tflint --init
 
-      - name: Run TFLint (modules)
-        run: tflint --recursive --format=compact
-        continue-on-error: false
+      - name: Run TFLint
+        run: task tflint
 
   trivy:
     name: Trivy Security Scan
@@ -102,6 +124,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Trivy IaC scanner
         uses: aquasecurity/trivy-action@master
@@ -138,26 +166,80 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: test/go.sum
 
-      - name: Download dependencies
-        run: go mod download
-        working-directory: test
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run unit tests
-        run: go test -v -short -timeout 5m ./...
-        working-directory: test
+        run: task test-unit
 
   #############################################################################
-  # Stage 3: Integration Tests (AWS)
+  # Stage 3a: Simple Integration Test (ENABLE_VERSION_TESTING == false)
   #############################################################################
 
-  integration-tests:
-    name: Integration Tests
+  integration-test:
+    name: Integration Test
     runs-on: ubuntu-latest
     needs: [tests-unit]
-    # Only run on master branch or when explicitly requested
-    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
+    if: |
+      env.ENABLE_VERSION_TESTING == 'false' &&
+      (github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'run-integration-tests'))
     timeout-minutes: 45
+    env:
+      PIPELINE_RUN_ID: "${{ github.run_id }}"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: terratest-integration-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: test/go.sum
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run integration tests
+        run: task test-integration
+
+  #############################################################################
+  # Stage 3b: Version Discovery (ENABLE_VERSION_TESTING == true)
+  #############################################################################
+
+  discover-versions:
+    name: Discover EKS Versions
+    runs-on: ubuntu-latest
+    needs: [tests-unit]
+    if: |
+      env.ENABLE_VERSION_TESTING == 'true' &&
+      (github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'run-integration-tests'))
+    outputs:
+      versions: ${{ steps.get-versions.outputs.versions }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -166,14 +248,118 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          role-session-name: terratest-eks-${{ github.run_id }}
+          role-session-name: eks-version-discovery-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Discover supported EKS versions
+        id: get-versions
+        run: |
+          task discover-versions
+          VERSIONS_CSV=$(cat .task/versions.txt)
+          echo "Discovered versions: $VERSIONS_CSV"
+          JSON_VERSIONS=$(echo "$VERSIONS_CSV" | tr ',' '\n' | jq -R . | jq -s -c .)
+          echo "JSON versions: $JSON_VERSIONS"
+          echo "versions=$JSON_VERSIONS" >> "$GITHUB_OUTPUT"
+        env:
+          MIN_EKS_VERSION: ${{ env.MIN_EKS_VERSION }}
+
+  #############################################################################
+  # Stage 4: Deploy Shared VPC (ENABLE_VERSION_TESTING == true)
+  #############################################################################
+
+  deploy-vpc:
+    name: Deploy Shared VPC
+    runs-on: ubuntu-latest
+    needs: [discover-versions]
+    if: env.ENABLE_VERSION_TESTING == 'true'
+    timeout-minutes: 15
+    env:
+      PIPELINE_RUN_ID: "${{ github.run_id }}"
+    outputs:
+      vpc_id: ${{ steps.vpc-outputs.outputs.vpc_id }}
+      private_subnets: ${{ steps.vpc-outputs.outputs.private_subnets }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: terratest-vpc-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy VPC
+        run: task deploy -- vpc
+
+      - name: Get VPC Outputs
+        id: vpc-outputs
+        run: |
+          VPC_ID=$(terraform output -raw vpc_id)
+          PRIVATE_SUBNETS=$(terraform output -raw private_subnets_json)
+          echo "vpc_id=$VPC_ID" >> "$GITHUB_OUTPUT"
+          echo "private_subnets=$PRIVATE_SUBNETS" >> "$GITHUB_OUTPUT"
+          echo "VPC ID: $VPC_ID"
+          echo "Private Subnets: $PRIVATE_SUBNETS"
+        working-directory: examples/vpc
+
+      - name: Upload VPC state
+        uses: actions/upload-artifact@v4
+        with:
+          name: vpc-terraform-state
+          path: examples/vpc/terraform.tfstate*
+          retention-days: 1
+
+  #############################################################################
+  # Stage 5: Parallel EKS Integration Tests (ENABLE_VERSION_TESTING == true)
+  #############################################################################
+
+  integration-tests:
+    name: EKS ${{ matrix.version }} Integration Test
+    runs-on: ubuntu-latest
+    needs: [deploy-vpc, discover-versions]
+    if: env.ENABLE_VERSION_TESTING == 'true'
+    timeout-minutes: 40
+    env:
+      PIPELINE_RUN_ID: "${{ github.run_id }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.discover-versions.outputs.versions) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: terratest-eks-${{ matrix.version }}-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
-          terraform_wrapper: false  # Required for Terratest
+          terraform_wrapper: false
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -181,39 +367,102 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: test/go.sum
 
-      - name: Download dependencies
-        run: go mod download
-        working-directory: test
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run integration tests
-        run: |
-          go test -v -timeout 40m -run TestEksCluster ./...
+      - name: Deploy EKS cluster
+        run: task deploy -- eks
+        env:
+          TF_VAR_vpc_id: ${{ needs.deploy-vpc.outputs.vpc_id }}
+          TF_VAR_private_subnet_ids: ${{ needs.deploy-vpc.outputs.private_subnets }}
+          TF_VAR_cluster_version: ${{ matrix.version }}
+
+      - name: Run versioned integration test
+        run: go test -v -timeout 35m -run TestEksClusterVersioned ./integration/...
         working-directory: test
         env:
           AWS_REGION: ${{ env.AWS_REGION }}
-          TF_VAR_cluster_version: "1.29"
-          TF_VAR_github_run_id: "${{ github.run_id }}"
+          TF_VAR_vpc_id: ${{ needs.deploy-vpc.outputs.vpc_id }}
+          TF_VAR_private_subnet_ids: ${{ needs.deploy-vpc.outputs.private_subnets }}
+          TF_VAR_cluster_version: ${{ matrix.version }}
+
+      - name: Destroy EKS cluster
+        if: always()
+        run: task destroy -- eks
+        env:
+          TF_VAR_vpc_id: ${{ needs.deploy-vpc.outputs.vpc_id }}
+          TF_VAR_private_subnet_ids: ${{ needs.deploy-vpc.outputs.private_subnets }}
+          TF_VAR_cluster_version: ${{ matrix.version }}
 
       - name: Upload test logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-logs-${{ github.run_id }}
+          name: test-logs-eks-${{ matrix.version }}-${{ github.run_id }}
           path: |
             test/*.log
-            examples/complete/*.tfplan
-            examples/complete/terraform.tfstate*
+            examples/eks/*.tfplan
+            examples/eks/terraform.tfstate*
           retention-days: 7
 
   #############################################################################
-  # Cleanup job (runs even if integration tests fail)
+  # Stage 6: Cleanup VPC (after all EKS tests complete)
   #############################################################################
 
-  cleanup:
+  cleanup-vpc:
+    name: Cleanup Shared VPC
+    runs-on: ubuntu-latest
+    needs: [integration-tests, deploy-vpc]
+    if: always() && env.ENABLE_VERSION_TESTING == 'true' && needs.deploy-vpc.result == 'success'
+    env:
+      PIPELINE_RUN_ID: "${{ github.run_id }}"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: terratest-vpc-cleanup-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download VPC state
+        uses: actions/download-artifact@v4
+        with:
+          name: vpc-terraform-state
+          path: examples/vpc
+
+      - name: Destroy VPC
+        run: task destroy -- vpc
+
+  #############################################################################
+  # Stage 7: Fallback Cleanup (cloud-nuke safety net)
+  #############################################################################
+
+  cleanup-fallback:
     name: Cleanup AWS Resources (cloud-nuke)
     runs-on: ubuntu-latest
-    needs: [integration-tests]
-    if: always() && needs.integration-tests.result != 'skipped'
+    needs: [cleanup-vpc, integration-tests]
+    if: |
+      always() &&
+      env.ENABLE_VERSION_TESTING == 'true' &&
+      (needs.integration-tests.result != 'skipped' || needs.cleanup-vpc.result != 'skipped')
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -225,30 +474,16 @@ jobs:
           role-session-name: terratest-cleanup-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Install cloud-nuke
-        run: |
-          wget -q "https://github.com/gruntwork-io/cloud-nuke/releases/download/${CLOUD_NUKE_VERSION}/cloud-nuke_linux_amd64"
-          chmod +x cloud-nuke_linux_amd64
-          sudo mv cloud-nuke_linux_amd64 /usr/local/bin/cloud-nuke
-          cloud-nuke --version
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run cleanup fallback
+        run: task cleanup-fallback
         env:
           CLOUD_NUKE_VERSION: v0.46.0
-
-      - name: Generate cloud-nuke config
-        run: |
-          sed "s/PLACEHOLDER_RUN_ID/${{ github.run_id }}/g" \
-            .cloud-nuke-config.template.yml > cloud-nuke-config.yml
-          cat cloud-nuke-config.yml
-
-      - name: Run cloud-nuke
-        run: |
-          cloud-nuke aws \
-            --config cloud-nuke-config.yml \
-            --region ${{ env.AWS_REGION }} \
-            --dry-run \
-            --timeout 30m \
-            --log-level info
-        env:
           DISABLE_TELEMETRY: "true"
 
   #############################################################################
@@ -258,7 +493,16 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [terraform-fmt, terraform-validate, tflint, trivy, tests-unit, integration-tests]
+    needs:
+      - terraform-fmt
+      - terraform-validate
+      - tflint
+      - trivy
+      - tests-unit
+      - integration-test
+      - integration-tests
+      - cleanup-vpc
+      - cleanup-fallback
     if: always()
     steps:
       - name: Check all jobs
@@ -271,15 +515,27 @@ jobs:
           echo ""
           echo "Test Results:"
           echo "  - tests-unit: ${{ needs.tests-unit.result }}"
-          echo "  - integration-tests: ${{ needs.integration-tests.result }}"
+          echo "  - integration-test (simple path): ${{ needs.integration-test.result }}"
+          echo "  - integration-tests (version matrix): ${{ needs.integration-tests.result }}"
+          echo ""
+          echo "Cleanup Results:"
+          echo "  - cleanup-vpc: ${{ needs.cleanup-vpc.result }}"
+          echo "  - cleanup-fallback: ${{ needs.cleanup-fallback.result }}"
 
-          # Fail if any required job failed
+          # Fail if any required static analysis or unit test job failed
           if [[ "${{ needs.terraform-fmt.result }}" == "failure" ]] || \
              [[ "${{ needs.terraform-validate.result }}" == "failure" ]] || \
              [[ "${{ needs.tflint.result }}" == "failure" ]] || \
              [[ "${{ needs.trivy.result }}" == "failure" ]] || \
              [[ "${{ needs.tests-unit.result }}" == "failure" ]]; then
             echo "One or more required jobs failed"
+            exit 1
+          fi
+
+          # Fail if whichever integration path ran actually failed
+          if [[ "${{ needs.integration-test.result }}" == "failure" ]] || \
+             [[ "${{ needs.integration-tests.result }}" == "failure" ]]; then
+            echo "Integration tests failed"
             exit 1
           fi
 

@@ -16,10 +16,21 @@ variable "cluster_version" {
   default     = "1.31"
 }
 
-variable "vpc_cidr" {
-  description = "CIDR block for the VPC"
+variable "vpc_id" {
+  description = "ID of the VPC where EKS will be deployed"
   type        = string
-  default     = "10.0.0.0/16"
+}
+
+variable "private_subnet_ids" {
+  description = "List of private subnet IDs for EKS nodes"
+  type        = list(string)
+  default     = []
+}
+
+variable "private_subnets" {
+  description = "Alias for private_subnet_ids (auto-loaded from VPC layer outputs)"
+  type        = list(string)
+  default     = []
 }
 
 variable "environment" {
@@ -31,13 +42,13 @@ variable "environment" {
 variable "node_instance_types" {
   description = "Instance types for the managed node group"
   type        = list(string)
-  default     = ["t3.medium"]
+  default     = ["t3.small"]
 }
 
 variable "node_desired_size" {
   description = "Desired number of nodes in the managed node group"
   type        = number
-  default     = 2
+  default     = 1
 }
 
 variable "node_min_size" {
@@ -49,7 +60,7 @@ variable "node_min_size" {
 variable "node_max_size" {
   description = "Maximum number of nodes in the managed node group"
   type        = number
-  default     = 3
+  default     = 2
 }
 
 variable "pipeline_tags" {

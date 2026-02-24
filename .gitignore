@@ -1,5 +1,6 @@
 .claude
 .Claude.md
+.omc
 
 # Trivy
 trivy-results.json
@@ -24,3 +25,7 @@ terraform.tfstate.*.backup
 
 # IDE
 .idea
+
+# Task automation artifacts
+.task/
+*.log

@@ -1,10 +1,43 @@
 version: '3'
 
+# =============================================================================
+# CUSTOMIZE THESE FOR YOUR PROJECT
+# =============================================================================
 vars:
-  TERRAFORM_VERSION: "1.6.6"
-  GO_VERSION: "1.21"
-  AWS_REGION: "us-west-2"
-  TFLINT_VERSION: "v0.50.3"
+  PROJECT_NAME: eks-cluster
+  AWS_REGION: us-west-1
+  AWS_PROFILE: sandbox
+
+  # Layers: space-separated list of directories under examples/
+  # Deployed left-to-right, destroyed right-to-left
+  # Examples:
+  #   LAYERS: "vpc eks"          — EKS project (VPC first, then EKS)
+  #   LAYERS: "account-setup"    — Simple project (one layer)
+  #   LAYERS: ""                 — No infra deps (tests manage their own infra)
+  LAYERS: "vpc eks"
+
+  # Paths for static analysis (terraform validate runs on each)
+  VALIDATE_PATHS: "modules/eks-cluster examples/vpc examples/eks"
+
+  # Go test configuration
+  TEST_DIR: test
+  INTEGRATION_TEST_PATTERN: TestEksClusterVersioned
+  INTEGRATION_TEST_TIMEOUT: 35m
+
+  # Version testing (optional, set MIN_VERSION to empty to disable)
+  MIN_VERSION: "1.31"
+  VERSION_ADDON: vpc-cni
+
+  # Tool versions
+  TFLINT_VERSION: v0.50.3
+
+# Export Taskfile vars as real environment variables for scripts
+# (Taskfile vars are templates, NOT env vars — scripts can't read them without this)
+env:
+  PROJECT_NAME: "{{.PROJECT_NAME}}"
+  AWS_REGION: "{{.AWS_REGION}}"
+  AWS_PROFILE: "{{.AWS_PROFILE}}"
+# =============================================================================
 
 tasks:
   default:
@@ -27,10 +60,23 @@ tasks:
       - terraform fmt -recursive
 
   validate:
-    desc: "Validate Terraform configuration"
+    desc: "Validate Terraform configuration for all paths"
     cmds:
-      - cmd: cd modules/eks-cluster && terraform init -backend=false && terraform validate
-      - cmd: cd examples/complete && terraform init -backend=false && terraform validate
+      - |
+        for path in {{.VALIDATE_PATHS}}; do
+          echo "=== Validating: $path ==="
+          cd "$path" && rm -rf .terraform && terraform init -backend=false > /dev/null 2>&1 && terraform validate
+          cd - > /dev/null
+        done
+
+  validate-one:
+    desc: "Validate a single terraform directory"
+    summary: "Usage: task validate-one -- <directory>"
+    cmds:
+      - ./scripts/terraform.sh init "{{.CLI_ARGS}}" -backend=false
+      - terraform -chdir="{{.CLI_ARGS}}" validate
+    env:
+      PIPELINE_RUN_ID: "validate"
 
   tflint-init:
     desc: "Initialize TFLint and download plugins"
@@ -47,10 +93,10 @@ tasks:
   trivy:
     desc: "Run Trivy security and vulnerability scan"
     cmds:
-      - trivy config . --format table --severity CRITICAL,HIGH,MEDIUM --exit-code 1
+      - trivy config . --format table --severity CRITICAL,HIGH,MEDIUM --exit-code 1 --skip-dirs ".terraform" --skip-dirs "**/.terraform"
 
   trivy-detailed:
-    desc: "Run Trivy with detailed output"
+    desc: "Run Trivy with detailed JSON output"
     cmds:
       - trivy config . --format json --severity CRITICAL,HIGH,MEDIUM --output trivy-results.json
       - echo "Results saved to trivy-results.json"
@@ -75,38 +121,118 @@ tasks:
   test-unit:
     desc: "Run unit tests (validation, helpers - no AWS)"
     cmds:
-      - cd test && go test -v ./unit/...
+      - cd {{.TEST_DIR}} && go test -v ./unit/...
 
   test-unit-coverage:
     desc: "Run unit tests with coverage report"
     cmds:
-      - cd test && go test -v -cover -coverprofile=coverage.out ./unit/...
-      - cd test && go tool cover -html=coverage.out -o coverage.html
-      - echo "Coverage report saved to test/coverage.html"
+      - cd {{.TEST_DIR}} && go test -v -cover -coverprofile=coverage.out ./unit/...
+      - cd {{.TEST_DIR}} && go tool cover -html=coverage.out -o coverage.html
+      - echo "Coverage report saved to {{.TEST_DIR}}/coverage.html"
 
   ##############################################################################
-  # Integration Tests (Slow, Real AWS - E2E/Smoke)
+  # Layer Management (deploy/destroy infrastructure layers)
+  ##############################################################################
+
+  deploy:
+    desc: "Deploy a single infrastructure layer"
+    summary: "Usage: task deploy -- <layer_name>"
+    cmds:
+      - ./scripts/terraform.sh apply examples/{{.CLI_ARGS}}
+
+  deploy-all:
+    desc: "Deploy all layers in order (left to right)"
+    cmds:
+      - |
+        [[ -z "{{.LAYERS}}" ]] && echo "No layers configured, skipping deploy." && exit 0
+        # Generate RunID once — all layers share this value
+        export PIPELINE_RUN_ID="${PIPELINE_RUN_ID:-local-$(date +%Y%m%d-%H%M%S)}"
+        echo "=== Deploy RunID: $PIPELINE_RUN_ID ==="
+        for layer in {{.LAYERS}}; do
+          echo "=== Deploying layer: $layer ==="
+          PIPELINE_RUN_ID="$PIPELINE_RUN_ID" task deploy -- "$layer"
+        done
+
+  destroy:
+    desc: "Destroy a single infrastructure layer"
+    summary: "Usage: task destroy -- <layer_name>"
+    cmds:
+      - ./scripts/terraform.sh destroy examples/{{.CLI_ARGS}}
+
+  destroy-all:
+    desc: "Destroy all layers in reverse order (right to left)"
+    cmds:
+      - |
+        [[ -z "{{.LAYERS}}" ]] && echo "No layers configured, skipping destroy." && exit 0
+        for layer in $(echo "{{.LAYERS}}" | tr ' ' '\n' | awk '{a[NR]=$0} END{for(i=NR;i>=1;i--)print a[i]}'); do
+          echo "=== Destroying layer: $layer ==="
+          PIPELINE_RUN_ID="${PIPELINE_RUN_ID:-destroy}" task destroy -- "$layer" || true
+        done
+
+  plan-layer:
+    desc: "Plan a single infrastructure layer"
+    summary: "Usage: task plan-layer -- <layer_name>"
+    cmds:
+      - ./scripts/terraform.sh plan examples/{{.CLI_ARGS}}
+
+  plan-all:
+    desc: "Plan all layers in order"
+    cmds:
+      - |
+        [[ -z "{{.LAYERS}}" ]] && echo "No layers configured, skipping plan." && exit 0
+        for layer in {{.LAYERS}}; do
+          echo "=== Planning layer: $layer ==="
+          task plan-layer -- "$layer"
+        done
+
+  ##############################################################################
+  # Integration Tests (Real AWS)
   ##############################################################################
 
   test-integration:
-    desc: "Run integration tests (deploys real EKS to AWS)"
-    prompt: "This will deploy real AWS resources (~$0.20, 25 min). Continue?"
+    desc: "Run tests against already-deployed infrastructure (no deploy/destroy)"
+    summary: |
+      Runs tests against layers you deployed manually via 'task deploy -- vpc' etc.
+      Override the test pattern: task test-integration -- TestMyCustomTest
     cmds:
-      - cd test && go test -v -timeout 40m ./integration/...
-    env:
-      AWS_REGION: "{{.AWS_REGION}}"
+      - cd {{.TEST_DIR}} && go test -v -run "{{if .CLI_ARGS}}{{.CLI_ARGS}}{{else}}{{.INTEGRATION_TEST_PATTERN}}{{end}}" -timeout {{.INTEGRATION_TEST_TIMEOUT}} ./integration/...
 
-  test-smoke:
-    desc: "Alias for test-integration (smoke tests)"
-    prompt: "This will deploy real AWS resources (~$0.20, 25 min). Continue?"
+  test-run:
+    desc: "Full pipeline: deploy layers, run tests, destroy layers"
+    prompt: "This will deploy real AWS resources. Continue?"
     cmds:
+      - task: deploy-all
+      - defer: { task: destroy-all }
       - task: test-integration
 
-  test-e2e:
-    desc: "Alias for test-integration (end-to-end tests)"
-    prompt: "This will deploy real AWS resources (~$0.20, 25 min). Continue?"
+  test-run-versions:
+    desc: "Full pipeline with parallel version matrix (deploy base, test all versions, destroy)"
+    prompt: "This will deploy several clusters and versions. Continue?"
     cmds:
-      - task: test-integration
+      - task: discover-versions
+      - task: deploy -- vpc
+      - defer: { task: destroy -- vpc }
+      - ./scripts/test_versions.sh
+
+  ##############################################################################
+  # Version Discovery (Optional)
+  # Remove this section if your project doesn't need parallel version testing.
+  ##############################################################################
+
+  discover-versions:
+    desc: "Discover supported versions from AWS and store in .task/versions.txt"
+    cmds:
+      - |
+        VERSIONS=$(aws eks describe-addon-versions --addon-name {{.VERSION_ADDON}} \
+          --region {{.AWS_REGION}} \
+          --query 'addons[].addonVersions[].compatibilities[].clusterVersion' \
+          --output text 2>/dev/null | tr '\t' '\n' | sort -V | uniq | \
+          awk -v min="{{.MIN_VERSION}}" '$0 >= min' | head -4) || \
+        VERSIONS="1.31 1.32"
+
+        mkdir -p .task
+        echo "$VERSIONS" > .task/versions.txt
+        echo "Discovered versions: $(cat .task/versions.txt)"
 
   ##############################################################################
   # Combined Test Suites
@@ -119,12 +245,20 @@ tasks:
       - task: test-unit
 
   test-all:
-    desc: "Run all tests including integration"
+    desc: "Run everything: lint + unit + deploy + integration + destroy"
     prompt: "This will deploy real AWS resources. Continue?"
     cmds:
       - task: lint
       - task: test-unit
-      - task: test-integration
+      - task: test-run
+
+  test-all-versions:
+    desc: "Run everything with all version matrix"
+    prompt: "This will deploy several clusters and versions. Continue?"
+    cmds:
+      - task: lint
+      - task: test-unit
+      - task: test-run-versions
 
   ##############################################################################
   # Initialization Tasks
@@ -133,14 +267,18 @@ tasks:
   init:
     desc: "Initialize all Terraform configurations"
     cmds:
-      - cmd: cd modules/eks-cluster && terraform init -backend=false
-      - cmd: cd examples/complete && terraform init -backend=false
+      - |
+        for path in {{.VALIDATE_PATHS}}; do
+          echo "=== Initializing: $path ==="
+          cd "$path" && terraform init -backend=false > /dev/null 2>&1
+          cd - > /dev/null
+        done
 
   deps:
     desc: "Download Go dependencies"
     cmds:
-      - cd test && go mod download
-      - cd test && go mod tidy
+      - cd {{.TEST_DIR}} && go mod download
+      - cd {{.TEST_DIR}} && go mod tidy
 
   setup:
     desc: "Setup development environment"
@@ -159,22 +297,50 @@ tasks:
       - cmd: find . -type d -name ".terraform" -exec rm -rf {} + 2>/dev/null || true
       - cmd: find . -type f -name ".terraform.lock.hcl" -delete
       - cmd: find . -type f -name "*.tfstate*" -delete
-      - cmd: cd test && go clean -cache -testcache
-
-  cleanup-aws:
-    desc: "Check for orphaned AWS resources (manual review needed)"
-    cmds:
-      - echo "EKS clusters with terratest prefix:"
-      - aws eks list-clusters --region {{.AWS_REGION}} --query "clusters[?starts_with(@, 'terratest-')]" --output text
-      - echo ""
-      - echo "VPCs tagged with Test=terratest:"
-      - aws ec2 describe-vpcs --region {{.AWS_REGION}} --filters "Name=tag:Test,Values=terratest" --query "Vpcs[*].VpcId" --output text
+      - cmd: rm -rf .task
+      - cmd: cd {{.TEST_DIR}} && go clean -cache -testcache
 
   clean-all:
     desc: "Deep clean (Terraform state + Go cache + .tflint cache)"
     cmds:
       - task: clean
       - cmd: rm -rf ~/.tflint.d 2>/dev/null || true
+
+  cleanup-fallback:
+    desc: "Safety-net cleanup using cloud-nuke (deletes resources by Pipeline + RunID tags)"
+    cmds:
+      - |
+        # Load run metadata saved during deploy
+        if [[ -f .task/run-metadata.env ]]; then
+          source .task/run-metadata.env
+        else
+          echo "No run metadata found. Skipping cleanup."
+          exit 0
+        fi
+        # Generate config from template (use | delimiter to avoid issues with / in values)
+        sed -e "s|PLACEHOLDER_PIPELINE|${PIPELINE_TAG}|g" \
+            -e "s|PLACEHOLDER_RUN_ID|${PIPELINE_RUN_ID}|g" \
+            .cloud-nuke-config.template.yml > .task/cloud-nuke-config.yml
+        # Dry run first
+        cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --dry-run --force
+        # Actual deletion
+        cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --force
+
+  cleanup-project:
+    desc: "Delete ALL resources for this project (any RunID) — DRY RUN ONLY"
+    summary: "Nuclear option — shows everything tagged with Pipeline={{.PROJECT_NAME}}"
+    cmds:
+      - |
+        # Generate config with only Pipeline tag (remove RunID lines)
+        sed -e "s|PLACEHOLDER_PIPELINE|{{.PROJECT_NAME}}|g" \
+            -e "/RunID/d" \
+            .cloud-nuke-config.template.yml > .task/cloud-nuke-config.yml
+        cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --dry-run --force
+        echo ""
+        echo "=== DRY RUN COMPLETE ==="
+        echo "Only resources tagged Pipeline={{.PROJECT_NAME}} would be deleted."
+        echo "To actually delete, run:"
+        echo "  cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --force"
 
   ##############################################################################
   # Development Workflows
@@ -217,8 +383,8 @@ tasks:
   debug-go:
     desc: "Run tests with verbose Go logging"
     cmds:
-      - echo "Running tests with -v flag..."
-      - cd test && go test -v -timeout 40m -run TestEksClusterComplete ./...
+      - echo "Running integration tests with -v flag..."
+      - cd {{.TEST_DIR}} && go test -v -timeout 40m ./integration/...
 
   version-check:
     desc: "Check required tool versions"
@@ -228,6 +394,8 @@ tasks:
       - echo "Go:" && go version
       - echo "TFLint:" && tflint --version || echo "TFLint not installed"
       - echo "Trivy:" && trivy --version || echo "Trivy not installed"
+      - echo "Task:" && task --version || echo "Task not installed"
+      - echo "jq:" && jq --version || echo "jq not installed"
 
   ##############################################################################
   # Pre-commit Hooks
@@ -238,21 +406,21 @@ tasks:
     cmds:
       - echo "Installing pre-commit hook to .git/hooks/pre-commit..."
       - |
-        cat > .git/hooks/pre-commit << EOF
-          #!/bin/bash
-          echo "Running pre-commit checks..."
-          task lint || exit 1
-          task test-unit || exit 1
-          exit 0
-          EOF
+        cat > .git/hooks/pre-commit << 'EOF'
+        #!/bin/bash
+        echo "Running pre-commit checks..."
+        task lint || exit 1
+        task test-unit || exit 1
+        exit 0
+        EOF
       - chmod +x .git/hooks/pre-commit
-      - echo "✓ Pre-commit hook installed"
+      - echo "Pre-commit hook installed"
 
   hook-uninstall:
     desc: "Remove pre-commit hook"
     cmds:
       - rm -f .git/hooks/pre-commit
-      - echo "✓ Pre-commit hook removed"
+      - echo "Pre-commit hook removed"
 
   ##############################################################################
   # Quick Commands
@@ -264,4 +432,13 @@ tasks:
       - task: fmt
       - task: validate
       - task: test-unit
-    internal: false
+
+  ##############################################################################
+  # Helper Tasks (used by CI for matrix generation)
+  ##############################################################################
+
+  print-validate-paths:
+    desc: "Print validate paths (used by CI to generate matrix)"
+    silent: true
+    cmds:
+      - echo "{{.VALIDATE_PATHS}}"

@@ -6,6 +6,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/eks"
 	"github.com/gruntwork-io/terratest/modules/random"
 	"github.com/gruntwork-io/terratest/modules/retry"
+	"github.com/gruntwork-io/terratest/modules/terraform"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -215,4 +220,211 @@ func validateWorkloadDeployment(t *testing.T, clientset *kubernetes.Clientset) {
 	})
 
 	require.NoError(t, err, "Test pod should be running")
+}
+
+// discoverEKSVersions queries AWS for supported EKS versions >= minVersion.
+// Uses the vpc-cni addon compatibility list as the source of truth.
+func discoverEKSVersions(t *testing.T, region, minVersion string) []string {
+	t.Helper()
+
+	sess, err := session.NewSessionWithOptions(session.Options{
+		Config:            aws.Config{Region: aws.String(region)},
+		SharedConfigState: session.SharedConfigEnable,
+	})
+	require.NoError(t, err, "Failed to create AWS session")
+
+	eksSvc := eks.New(sess)
+
+	input := &eks.DescribeAddonVersionsInput{
+		AddonName: aws.String("vpc-cni"),
+	}
+
+	result, err := eksSvc.DescribeAddonVersions(input)
+	require.NoError(t, err, "Failed to describe addon versions")
+
+	// Collect unique cluster versions
+	versionSet := make(map[string]bool)
+	for _, addon := range result.Addons {
+		for _, addonVersion := range addon.AddonVersions {
+			for _, compat := range addonVersion.Compatibilities {
+				if compat.ClusterVersion != nil {
+					versionSet[*compat.ClusterVersion] = true
+				}
+			}
+		}
+	}
+
+	// Filter >= minVersion and sort
+	var versions []string
+	for v := range versionSet {
+		if compareVersions(v, minVersion) >= 0 {
+			versions = append(versions, v)
+		}
+	}
+
+	sort.Slice(versions, func(i, j int) bool {
+		return compareVersions(versions[i], versions[j]) < 0
+	})
+
+	require.NotEmpty(t, versions, "No EKS versions found >= %s", minVersion)
+
+	return versions
+}
+
+// compareVersions compares two dotted version strings (e.g. "1.31" vs "1.32").
+// Returns -1, 0, or 1.
+func compareVersions(a, b string) int {
+	aParts := strings.Split(a, ".")
+	bParts := strings.Split(b, ".")
+
+	maxLen := len(aParts)
+	if len(bParts) > maxLen {
+		maxLen = len(bParts)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		var aNum, bNum int
+		if i < len(aParts) {
+			aNum, _ = strconv.Atoi(aParts[i])
+		}
+		if i < len(bParts) {
+			bNum, _ = strconv.Atoi(bParts[i])
+		}
+		if aNum < bNum {
+			return -1
+		}
+		if aNum > bNum {
+			return 1
+		}
+	}
+
+	return 0
+}
+
+// copyFixtureToTemp copies a Terraform fixture directory to a temp dir,
+// rewriting relative module source paths to absolute. This allows parallel
+// Terraform runs without state lock conflicts.
+func copyFixtureToTemp(t *testing.T, fixtureRelPath string) string {
+	t.Helper()
+
+	// Resolve fixture path relative to repo root (tests run from test/integration/)
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err, "Failed to resolve repo root")
+
+	fixtureSrc := filepath.Join(repoRoot, fixtureRelPath)
+
+	// Create temp directory (auto-cleaned by t.TempDir())
+	tmpDir := t.TempDir()
+
+	entries, err := os.ReadDir(fixtureSrc)
+	require.NoError(t, err, "Failed to read fixture directory: %s", fixtureSrc)
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tf") {
+			continue
+		}
+
+		srcPath := filepath.Join(fixtureSrc, entry.Name())
+		content, err := os.ReadFile(srcPath)
+		require.NoError(t, err, "Failed to read %s", srcPath)
+
+		// Rewrite relative module source paths to absolute
+		contentStr := rewriteModuleSources(string(content), fixtureSrc)
+
+		dstPath := filepath.Join(tmpDir, entry.Name())
+		err = os.WriteFile(dstPath, []byte(contentStr), 0644)
+		require.NoError(t, err, "Failed to write %s", dstPath)
+	}
+
+	return tmpDir
+}
+
+// rewriteModuleSources replaces relative source paths (source = "../..") with
+// absolute paths resolved from the original fixture directory.
+func rewriteModuleSources(content, fixtureDir string) string {
+	re := regexp.MustCompile(`(source\s*=\s*")(\.\.[^"]*)(")`)
+	return re.ReplaceAllStringFunc(content, func(match string) string {
+		parts := re.FindStringSubmatch(match)
+		relPath := parts[2]
+		absPath, _ := filepath.Abs(filepath.Join(fixtureDir, relPath))
+		return parts[1] + absPath + parts[3]
+	})
+}
+
+// getPipelineTags generates pipeline tags for resource identification and cleanup.
+// These match the tags that scripts/terraform.sh would inject.
+func getPipelineTags(projectName string) map[string]string {
+	runID := os.Getenv("PIPELINE_RUN_ID")
+
+	environment := "local"
+	if ghRunID := os.Getenv("GITHUB_RUN_ID"); ghRunID != "" {
+		environment = "ci"
+		if runID == "" {
+			runID = ghRunID
+		}
+	}
+
+	if runID == "" {
+		runID = fmt.Sprintf("local-%s", time.Now().Format("20060102-150405"))
+	}
+
+	return map[string]string{
+		"Pipeline":    projectName,
+		"RunID":       runID,
+		"Environment": environment,
+	}
+}
+
+// testConfig centralizes environment variable lookups and shared test setup.
+type testConfig struct {
+	AWSRegion    string
+	ProjectName  string
+	MinVersion   string
+	PipelineTags map[string]string
+	UniqueID     string
+}
+
+// newTestConfig creates a testConfig, skipping in short mode.
+func newTestConfig(t *testing.T) *testConfig {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	projectName := getEnvWithDefault("PROJECT_NAME", "eks-cluster")
+	return &testConfig{
+		AWSRegion:    getEnvWithDefault("AWS_REGION", "us-west-1"),
+		ProjectName:  projectName,
+		MinVersion:   getEnvWithDefault("MIN_EKS_VERSION", "1.31"),
+		PipelineTags: getPipelineTags(projectName),
+		UniqueID:     strings.ToLower(random.UniqueId()),
+	}
+}
+
+// eksOutputs holds the standard Terraform outputs from an EKS deployment.
+type eksOutputs struct {
+	ClusterEndpoint string
+	ClusterCAData   string
+	ClusterName     string
+	ClusterVersion  string
+}
+
+// getEKSOutputs retrieves the four standard EKS outputs from Terraform.
+func getEKSOutputs(t *testing.T, opts *terraform.Options) *eksOutputs {
+	t.Helper()
+	return &eksOutputs{
+		ClusterEndpoint: terraform.Output(t, opts, "cluster_endpoint"),
+		ClusterCAData:   terraform.Output(t, opts, "cluster_certificate_authority_data"),
+		ClusterName:     terraform.Output(t, opts, "cluster_name"),
+		ClusterVersion:  terraform.Output(t, opts, "cluster_version"),
+	}
+}
+
+// validate asserts that the EKS outputs are non-empty and match expected values.
+func (o *eksOutputs) validate(t *testing.T, expectedName, expectedVersionPrefix string) {
+	t.Helper()
+	assert.NotEmpty(t, o.ClusterEndpoint, "Cluster endpoint should not be empty")
+	assert.NotEmpty(t, o.ClusterCAData, "Cluster CA data should not be empty")
+	assert.Equal(t, expectedName, o.ClusterName, "Cluster name should match")
+	assert.True(t, strings.HasPrefix(o.ClusterVersion, expectedVersionPrefix),
+		"Cluster version should match %s, got %s", expectedVersionPrefix, o.ClusterVersion)
 }

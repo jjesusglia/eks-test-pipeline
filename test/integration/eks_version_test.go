@@ -1,138 +1,105 @@
-// REFERENCE IMPLEMENTATION: Only needed for parallel version testing.
-// Remove this file if your project doesn't test multiple versions.
+// Self-contained EKS version matrix test. Deploys a shared VPC, discovers
+// supported EKS versions from AWS, then runs parallel subtests — one per version.
+// All cleanup is handled via defer (VPC destroy runs after all subtests complete).
+//
+// Remove this file if your project doesn't test multiple EKS versions.
 package test
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gruntwork-io/terratest/modules/terraform"
-	"github.com/stretchr/testify/assert"
 )
 
 const (
-	versionTestTimeout = 30 * time.Minute
-	versionNodeTimeout = 10 * time.Minute
+	versionMatrixTimeout = 55 * time.Minute
+	versionTestVPCName   = "terratest-vpc"
 )
 
-// TestEksClusterVersioned tests EKS deployment with a specific version using pre-deployed VPC.
-// This test is designed to run in parallel via GitHub Actions matrix strategy.
-// It expects the following environment variables:
-//   - TF_VAR_vpc_id: VPC ID from shared VPC deployment
-//   - TF_VAR_private_subnet_ids: JSON-encoded list of private subnet IDs
-//   - TF_VAR_cluster_version: EKS version to test (e.g., "1.31")
-//   - TF_VAR_pipeline_tags: Pipeline tags for resource identification (auto-injected by scripts/terraform.sh)
-func TestEksClusterVersioned(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+// TestEksClusterVersionMatrix deploys a shared VPC, discovers EKS versions,
+// and tests each version in parallel. No external env vars required (AWS creds only).
+func TestEksClusterVersionMatrix(t *testing.T) {
+	cfg := newTestConfig(t)
 
-	// Check required environment variables
-	// Supports both naming conventions:
-	//   TF_VAR_private_subnet_ids  — set explicitly by CI or user
-	//   TF_VAR_private_subnets     — auto-loaded from VPC layer outputs
-	vpcID := os.Getenv("TF_VAR_vpc_id")
-	privateSubnetsJSON := os.Getenv("TF_VAR_private_subnet_ids")
-	if privateSubnetsJSON == "" {
-		privateSubnetsJSON = os.Getenv("TF_VAR_private_subnets")
-	}
-	clusterVersion := os.Getenv("TF_VAR_cluster_version")
+	vpcName := fmt.Sprintf("%s-%s", versionTestVPCName, cfg.UniqueID)
 
-	if vpcID == "" {
-		t.Skip("TF_VAR_vpc_id not set, skipping versioned EKS test")
-	}
-	if privateSubnetsJSON == "" {
-		t.Skip("TF_VAR_private_subnet_ids / TF_VAR_private_subnets not set, skipping versioned EKS test")
-	}
-	if clusterVersion == "" {
-		clusterVersion = "1.31" // Default for local testing
-	}
+	t.Logf("VPC: %s | Region: %s | MinVersion: %s", vpcName, cfg.AWSRegion, cfg.MinVersion)
+	t.Logf("Pipeline tags: %v", cfg.PipelineTags)
 
-	t.Parallel()
-
-	// Generate unique cluster name with version
-	// Keep short — the fixture appends pipeline_run_hash for pipeline isolation
-	// IAM role name_prefix limit is 38 chars, EKS module adds "-cluster-" suffix
-	versionNormalized := strings.ReplaceAll(clusterVersion, ".", "-")
-	clusterName := fmt.Sprintf("test-eks-%s", versionNormalized)
-	awsRegion := getEnvWithDefault("AWS_REGION", "us-west-1")
-
-	t.Logf("Testing EKS version %s with cluster name: %s", clusterVersion, clusterName)
-
-	// Path to the EKS-only fixture
-	examplesDir := filepath.Join("../..", "examples", "eks")
-
-	// Parse private subnet IDs from JSON
-	privateSubnets := parseSubnetIDs(t, privateSubnetsJSON)
-
-	terraformOptions := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
-		TerraformDir: examplesDir,
+	// ── Step 1: Deploy shared VPC ──────────────────────────────────────────
+	vpcDir := copyFixtureToTemp(t, "examples/vpc")
+	vpcOpts := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
+		TerraformDir: vpcDir,
 		Vars: map[string]interface{}{
-			"cluster_name":        clusterName,
-			"cluster_version":     clusterVersion,
-			"aws_region":          awsRegion,
-			"vpc_id":              vpcID,
-			"private_subnet_ids":  privateSubnets,
-			"environment":         "terratest",
-			"node_instance_types": []string{"t3.small"},
-			"node_desired_size":   1,
-			"node_min_size":       1,
-			"node_max_size":       1,
+			"vpc_name":      vpcName,
+			"aws_region":    cfg.AWSRegion,
+			"environment":   "terratest",
+			"pipeline_tags": cfg.PipelineTags,
 		},
 		NoColor:     true,
 		Parallelism: 20,
 	})
 
-	// Ensure cleanup happens regardless of test outcome
-	defer terraform.Destroy(t, terraformOptions)
+	// VPC destroy runs AFTER all parallel subtests complete (Go testing guarantee)
+	defer terraform.Destroy(t, vpcOpts)
+	terraform.InitAndApply(t, vpcOpts)
 
-	// Deploy EKS cluster
-	terraform.InitAndApply(t, terraformOptions)
+	vpcID := terraform.Output(t, vpcOpts, "vpc_id")
+	privateSubnets := terraform.OutputList(t, vpcOpts, "private_subnets")
 
-	// Retrieve outputs
-	clusterEndpoint := terraform.Output(t, terraformOptions, "cluster_endpoint")
-	clusterCAData := terraform.Output(t, terraformOptions, "cluster_certificate_authority_data")
-	actualClusterName := terraform.Output(t, terraformOptions, "cluster_name")
-	actualVersion := terraform.Output(t, terraformOptions, "cluster_version")
+	t.Logf("VPC deployed: %s | Subnets: %v", vpcID, privateSubnets)
 
-	// Validate basic outputs
-	assert.NotEmpty(t, clusterEndpoint, "Cluster endpoint should not be empty")
-	assert.NotEmpty(t, clusterCAData, "Cluster CA data should not be empty")
-	assert.Equal(t, clusterName, actualClusterName, "Cluster name should match")
-	assert.True(t, strings.HasPrefix(actualVersion, clusterVersion),
-		"Cluster version should match requested version %s, got %s", clusterVersion, actualVersion)
+	// ── Step 2: Discover EKS versions ──────────────────────────────────────
+	versions := discoverEKSVersions(t, cfg.AWSRegion, cfg.MinVersion)
+	t.Logf("Discovered EKS versions: %v", versions)
 
-	// Run sub-tests
-	t.Run("ValidateClusterEndpoint", func(t *testing.T) {
-		validateClusterEndpoint(t, clusterEndpoint)
-	})
+	// ── Step 3: Parallel subtests per version ──────────────────────────────
+	for _, v := range versions {
+		version := v // capture loop variable
+		t.Run("EKS_"+strings.ReplaceAll(version, ".", "_"), func(t *testing.T) {
+			t.Parallel()
 
-	t.Run("ValidateClusterWithAWSSdk", func(t *testing.T) {
-		validateClusterStatus(t, awsRegion, actualClusterName, clusterVersion)
-	})
+			versionSlug := strings.ReplaceAll(version, ".", "-")
+			clusterName := fmt.Sprintf("test-eks-%s-%s", versionSlug, cfg.UniqueID)
 
-	// Create Kubernetes client for node validation
-	clientset := getKubernetesClient(t, awsRegion, actualClusterName, clusterEndpoint, clusterCAData)
+			t.Logf("Testing EKS %s → cluster: %s", version, clusterName)
 
-	t.Run("ValidateNodesReady", func(t *testing.T) {
-		validateNodeReadiness(t, clientset)
-	})
-}
+			// Each version gets its own temp dir (avoids state lock conflicts)
+			eksDir := copyFixtureToTemp(t, "examples/eks")
+			eksOpts := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
+				TerraformDir: eksDir,
+				Vars: map[string]interface{}{
+					"cluster_name":        clusterName,
+					"cluster_version":     version,
+					"aws_region":          cfg.AWSRegion,
+					"vpc_id":              vpcID,
+					"private_subnet_ids":  privateSubnets,
+					"environment":         "terratest",
+					"node_instance_types": []string{"t3.small"},
+					"node_desired_size":   1,
+					"node_min_size":       1,
+					"node_max_size":       1,
+					"pipeline_tags":       cfg.PipelineTags,
+					"pipeline_run_hash":   "",
+				},
+				NoColor:     true,
+				Parallelism: 20,
+			})
 
-// parseSubnetIDs parses a JSON array of subnet IDs
-func parseSubnetIDs(t *testing.T, jsonStr string) []string {
-	// Remove JSON array brackets and quotes, split by comma
-	cleaned := strings.Trim(jsonStr, "[]")
-	cleaned = strings.ReplaceAll(cleaned, "\"", "")
-	cleaned = strings.ReplaceAll(cleaned, " ", "")
+			defer terraform.Destroy(t, eksOpts)
+			terraform.InitAndApply(t, eksOpts)
 
-	if cleaned == "" {
-		t.Fatal("No subnet IDs provided")
+			out := getEKSOutputs(t, eksOpts)
+			out.validate(t, clusterName, version)
+
+			validateClusterEndpoint(t, out.ClusterEndpoint)
+			validateClusterStatus(t, cfg.AWSRegion, out.ClusterName, version)
+
+			clientset := getKubernetesClient(t, cfg.AWSRegion, out.ClusterName, out.ClusterEndpoint, out.ClusterCAData)
+			validateNodeReadiness(t, clientset)
+		})
 	}
-
-	return strings.Split(cleaned, ",")
 }

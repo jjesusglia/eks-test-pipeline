@@ -24,3 +24,6 @@ terraform.tfstate.*.backup
 
 # IDE
 .idea
+
+# OMC state
+.omc

@@ -103,3 +103,15 @@ variable "cluster_enabled_log_types" {
   type        = list(string)
   default     = ["api", "audit", "authenticator"]
 }
+
+variable "create_kms_key" {
+  description = "Controls if a KMS key for cluster encryption should be created"
+  type        = bool
+  default     = true
+}
+
+variable "cluster_encryption_config" {
+  description = "Encryption configuration. Set provider_key_arn when using external KMS key."
+  type        = any
+  default     = { resources = ["secrets"] }
+}

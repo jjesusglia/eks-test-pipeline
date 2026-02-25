@@ -30,6 +30,10 @@ module "eks" {
   cloudwatch_log_group_retention_in_days = var.cloudwatch_log_group_retention_in_days
   cluster_enabled_log_types              = var.cluster_enabled_log_types
 
+  # Encryption
+  create_kms_key            = var.create_kms_key
+  cluster_encryption_config = var.cluster_encryption_config
+
   # Tags
   tags         = var.tags
   cluster_tags = var.cluster_tags

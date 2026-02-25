@@ -37,6 +37,7 @@ env:
   PROJECT_NAME: "{{.PROJECT_NAME}}"
   AWS_REGION: "{{.AWS_REGION}}"
   AWS_PROFILE: "{{.AWS_PROFILE}}"
+  TF_VAR_aws_region: "{{.AWS_REGION}}"
 # =============================================================================
 
 tasks:
@@ -169,6 +170,22 @@ tasks:
           PIPELINE_RUN_ID="${PIPELINE_RUN_ID:-destroy}" task destroy -- "$layer" || true
         done
 
+  destroy-versions:
+    desc: "Destroy all version workdirs from parallel version testing"
+    cmds:
+      - |
+        if [[ ! -d .task/versions ]]; then
+          echo "No version workdirs found."
+          exit 0
+        fi
+        for dir in .task/versions/eks-*/; do
+          [[ -d "$dir" ]] || continue
+          echo "=== Destroying: $dir ==="
+          terraform -chdir="$dir" destroy -auto-approve || true
+        done
+        echo "=== Cleaning version workdirs ==="
+        rm -rf .task/versions
+
   plan-layer:
     desc: "Plan a single infrastructure layer"
     summary: "Usage: task plan-layer -- <layer_name>"
@@ -193,9 +210,20 @@ tasks:
     desc: "Run tests against already-deployed infrastructure (no deploy/destroy)"
     summary: |
       Runs tests against layers you deployed manually via 'task deploy -- vpc' etc.
+      Automatically loads layer outputs as TF_VAR_* env vars.
       Override the test pattern: task test-integration -- TestMyCustomTest
+      Run all tests:              task test-integration -- Test
     cmds:
-      - cd {{.TEST_DIR}} && go test -v -run "{{if .CLI_ARGS}}{{.CLI_ARGS}}{{else}}{{.INTEGRATION_TEST_PATTERN}}{{end}}" -timeout {{.INTEGRATION_TEST_TIMEOUT}} ./integration/...
+      - |
+        # Load outputs from all deployed layers
+        for output_file in .task/*.outputs.json; do
+          [[ -f "$output_file" ]] || continue
+          echo "--- Loading outputs from: $output_file"
+          eval "$(./scripts/load_layer_outputs.sh "$output_file")"
+        done
+        PATTERN="{{if .CLI_ARGS}}{{.CLI_ARGS}}{{else}}{{.INTEGRATION_TEST_PATTERN}}{{end}}"
+        echo "--- Running: go test -run $PATTERN"
+        cd {{.TEST_DIR}} && go test -v -run "$PATTERN" -timeout {{.INTEGRATION_TEST_TIMEOUT}} ./integration/...
 
   test-run:
     desc: "Full pipeline: deploy layers, run tests, destroy layers"
@@ -205,13 +233,22 @@ tasks:
       - defer: { task: destroy-all }
       - task: test-integration
 
+  test-versions:
+    desc: "Run parallel version tests against already-deployed VPC"
+    summary: |
+      Discovers versions and runs parallel EKS tests against your deployed VPC.
+      Deploy VPC first: task deploy -- vpc
+    cmds:
+      - task: discover-versions
+      - ./scripts/test_versions.sh
+
   test-run-versions:
-    desc: "Full pipeline with parallel version matrix (deploy base, test all versions, destroy)"
+    desc: "Full pipeline: deploy VPC, parallel version tests, destroy VPC"
     prompt: "This will deploy several clusters and versions. Continue?"
     cmds:
       - task: discover-versions
-      - task: deploy -- vpc
-      - defer: { task: destroy -- vpc }
+      - cmd: ./scripts/terraform.sh apply examples/vpc
+      - defer: { cmd: ./scripts/terraform.sh destroy examples/vpc || true }
       - ./scripts/test_versions.sh
 
   ##############################################################################
@@ -306,41 +343,45 @@ tasks:
       - task: clean
       - cmd: rm -rf ~/.tflint.d 2>/dev/null || true
 
-  cleanup-fallback:
-    desc: "Safety-net cleanup using cloud-nuke (deletes resources by Pipeline + RunID tags)"
+  cleanup-run:
+    desc: "Clean orphaned resources from current/last run (Pipeline + RunID). Add '-- force' to delete."
     cmds:
       - |
-        # Load run metadata saved during deploy
         if [[ -f .task/run-metadata.env ]]; then
           source .task/run-metadata.env
         else
-          echo "No run metadata found. Skipping cleanup."
+          echo "No run metadata found. Skipping."
           exit 0
         fi
-        # Generate config from template (use | delimiter to avoid issues with / in values)
+        mkdir -p .task
         sed -e "s|PLACEHOLDER_PIPELINE|${PIPELINE_TAG}|g" \
             -e "s|PLACEHOLDER_RUN_ID|${PIPELINE_RUN_ID}|g" \
             .cloud-nuke-config.template.yml > .task/cloud-nuke-config.yml
-        # Dry run first
-        cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --dry-run --force
-        # Actual deletion
-        cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --force
+        echo "=== Scope: Pipeline=${PIPELINE_TAG}, RunID=${PIPELINE_RUN_ID} ==="
+        if [[ "{{.CLI_ARGS}}" == "force" ]]; then
+          cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --force
+        else
+          cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --dry-run --force
+          echo ""
+          echo "DRY RUN. To delete: task cleanup-run -- force"
+        fi
 
   cleanup-project:
-    desc: "Delete ALL resources for this project (any RunID) — DRY RUN ONLY"
-    summary: "Nuclear option — shows everything tagged with Pipeline={{.PROJECT_NAME}}"
+    desc: "Clean ALL resources for this project (any RunID). Add '-- force' to delete."
     cmds:
       - |
-        # Generate config with only Pipeline tag (remove RunID lines)
+        mkdir -p .task
         sed -e "s|PLACEHOLDER_PIPELINE|{{.PROJECT_NAME}}|g" \
             -e "/RunID/d" \
             .cloud-nuke-config.template.yml > .task/cloud-nuke-config.yml
-        cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --dry-run --force
-        echo ""
-        echo "=== DRY RUN COMPLETE ==="
-        echo "Only resources tagged Pipeline={{.PROJECT_NAME}} would be deleted."
-        echo "To actually delete, run:"
-        echo "  cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --force"
+        echo "=== Scope: Pipeline={{.PROJECT_NAME}} (ALL runs) ==="
+        if [[ "{{.CLI_ARGS}}" == "force" ]]; then
+          cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --force
+        else
+          cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --dry-run --force
+          echo ""
+          echo "DRY RUN. To delete: task cleanup-project -- force"
+        fi
 
   ##############################################################################
   # Development Workflows

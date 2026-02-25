@@ -49,7 +49,7 @@ if [[ "$PROJECT_NAME" =~ [\"\\] ]]; then
 fi
 
 # Generate a short unique hash from RunID for resource naming (avoids conflicts)
-RUN_HASH=$(echo -n "$RUN_ID" | md5sum 2>/dev/null | cut -c1-6 || echo -n "$RUN_ID" | md5 2>/dev/null | cut -c1-6 || echo "${RUN_ID: -6}")
+RUN_HASH=$(echo -n "$RUN_ID" | md5sum 2>/dev/null | cut -c1-4 || echo -n "$RUN_ID" | md5 2>/dev/null | cut -c1-4 || echo "${RUN_ID: -4}")
 
 # Export pipeline tags as TF_VAR (terraform auto-reads TF_VAR_* env vars)
 export TF_VAR_pipeline_tags="{\"Pipeline\":\"${PROJECT_NAME}\",\"RunID\":\"${RUN_ID}\",\"Environment\":\"${ENVIRONMENT}\"}"
@@ -62,9 +62,14 @@ export PIPELINE_ENVIRONMENT="${ENVIRONMENT}"
 echo "--- Pipeline Tags: Pipeline=${PROJECT_NAME}, RunID=${RUN_ID}, Environment=${ENVIRONMENT}"
 
 # Source layer outputs from previous layers (if any exist in .task/*.outputs.json)
+# Skip outputs from the current layer being deployed (avoids stale self-reference)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CURRENT_LAYER_NAME=$(basename "$LAYER_DIR")
 for output_file in .task/*.outputs.json; do
   [[ -f "$output_file" ]] || continue
+  OUTPUT_BASENAME=$(basename "$output_file" .outputs.json)
+  # Skip if this output file matches the layer we're deploying
+  [[ "$OUTPUT_BASENAME" == "$CURRENT_LAYER_NAME" ]] && continue
   echo "--- Loading outputs from: $output_file"
   eval "$("${SCRIPT_DIR}/load_layer_outputs.sh" "$output_file")"
 done

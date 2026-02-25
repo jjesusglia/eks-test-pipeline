@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gruntwork-io/terratest/modules/random"
 	"github.com/gruntwork-io/terratest/modules/terraform"
 	"github.com/stretchr/testify/assert"
 )
@@ -33,15 +32,21 @@ func TestEksClusterVersioned(t *testing.T) {
 	}
 
 	// Check required environment variables
+	// Supports both naming conventions:
+	//   TF_VAR_private_subnet_ids  — set explicitly by CI or user
+	//   TF_VAR_private_subnets     — auto-loaded from VPC layer outputs
 	vpcID := os.Getenv("TF_VAR_vpc_id")
 	privateSubnetsJSON := os.Getenv("TF_VAR_private_subnet_ids")
+	if privateSubnetsJSON == "" {
+		privateSubnetsJSON = os.Getenv("TF_VAR_private_subnets")
+	}
 	clusterVersion := os.Getenv("TF_VAR_cluster_version")
 
 	if vpcID == "" {
 		t.Skip("TF_VAR_vpc_id not set, skipping versioned EKS test")
 	}
 	if privateSubnetsJSON == "" {
-		t.Skip("TF_VAR_private_subnet_ids not set, skipping versioned EKS test")
+		t.Skip("TF_VAR_private_subnet_ids / TF_VAR_private_subnets not set, skipping versioned EKS test")
 	}
 	if clusterVersion == "" {
 		clusterVersion = "1.31" // Default for local testing
@@ -50,9 +55,10 @@ func TestEksClusterVersioned(t *testing.T) {
 	t.Parallel()
 
 	// Generate unique cluster name with version
-	uniqueID := strings.ToLower(random.UniqueId())
+	// Keep short — the fixture appends pipeline_run_hash for pipeline isolation
+	// IAM role name_prefix limit is 38 chars, EKS module adds "-cluster-" suffix
 	versionNormalized := strings.ReplaceAll(clusterVersion, ".", "-")
-	clusterName := fmt.Sprintf("terratest-eks-%s-%s", versionNormalized, uniqueID)
+	clusterName := fmt.Sprintf("test-eks-%s", versionNormalized)
 	awsRegion := getEnvWithDefault("AWS_REGION", "us-west-1")
 
 	t.Logf("Testing EKS version %s with cluster name: %s", clusterVersion, clusterName)

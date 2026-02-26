@@ -206,6 +206,8 @@ tasks:
       - task: init
       - task: deps
       - task: tflint-init
+      - git config --unset-all core.hooksPath || true
+      - pre-commit install
 
   ##############################################################################
   # Cleanup Tasks
@@ -281,32 +283,6 @@ tasks:
     internal: true
     cmds:
       - ./ci/version_check.sh
-
-  ##############################################################################
-  # Pre-commit Hooks
-  ##############################################################################
-
-  hook-install:
-    desc: "Install pre-commit hook"
-    cmds:
-      - echo "Installing pre-commit hook to .git/hooks/pre-commit..."
-      - |
-        cat > .git/hooks/pre-commit << 'EOF'
-        #!/bin/bash
-        echo "Running pre-commit checks..."
-        task lint || exit 1
-        task test-unit || exit 1
-        exit 0
-        EOF
-      - chmod +x .git/hooks/pre-commit
-      - echo "Pre-commit hook installed"
-
-  hook-uninstall:
-    desc: "Remove pre-commit hook"
-    cmds:
-      - rm -f .git/hooks/pre-commit
-      - echo "Pre-commit hook removed"
-
 
   ##############################################################################
   # Helper Tasks (used by CI for matrix generation)

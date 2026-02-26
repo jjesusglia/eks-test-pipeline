@@ -25,3 +25,4 @@ check_tool "TFLint" tflint --version
 check_tool "Trivy" trivy --version
 check_tool "Task" task --version
 check_tool "jq" jq --version
+check_tool "pre-commit" pre-commit --version

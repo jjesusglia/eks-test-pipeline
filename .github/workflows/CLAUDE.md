@@ -8,5 +8,4 @@
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
 | #569 | 3:33 PM | 🟣 | Created AI Agent Documentation for workflows Directory | ~529 |
-| #564 | 3:32 PM | 🟣 | Created AI Agent Documentation for Project Root | ~479 |
 </claude-mem-context>

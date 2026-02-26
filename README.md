@@ -174,11 +174,11 @@ task cleanup-project      # Delete ALL resources for this project (dry-run only)
 
 | Command | Purpose |
 |---------|---------|
-| `task setup` | Initialize dev environment |
+| `task setup` | Initialize dev environment (includes pre-commit hooks) |
 | `task ci` | Run CI pipeline locally |
 | `task clean` | Clean terraform state + go cache |
 | `task validate-tf -- <dir>` | Validate a single directory |
-| `task hook-install` | Install pre-commit hook |
+| `pre-commit run -a` | Run all pre-commit hooks manually |
 
 ## CI/CD
 

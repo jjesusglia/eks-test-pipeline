@@ -8,7 +8,7 @@
 #
 # Required env vars (set by Taskfile global env block):
 #   PROJECT_NAME     — from Taskfile vars
-#   PIPELINE_RUN_ID  — generated once by deploy-all, shared across layers
+#   PIPELINE_RUN_ID  — generated once by deploy, shared across layers
 
 set -euo pipefail
 
@@ -28,12 +28,12 @@ if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
   RUN_ID="${GITHUB_RUN_ID}"
 else
   ENVIRONMENT="local"
-  # PIPELINE_RUN_ID is set by deploy-all to ensure all layers share the same ID.
+  # PIPELINE_RUN_ID is set by deploy to ensure all layers share the same ID.
   # If not set (e.g., running task deploy -- vpc directly), auto-generate one.
   if [[ -z "${PIPELINE_RUN_ID:-}" ]]; then
     PIPELINE_RUN_ID="local-$(date +%Y%m%d-%H%M%S)"
     echo "--- Auto-generated PIPELINE_RUN_ID: $PIPELINE_RUN_ID"
-    echo "--- Tip: Use 'task deploy-all' to share a single RunID across all layers."
+    echo "--- Tip: Use 'task deploy' to share a single RunID across all layers."
   fi
   RUN_ID="${PIPELINE_RUN_ID}"
 fi

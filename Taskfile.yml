@@ -24,8 +24,6 @@ vars:
   INTEGRATION_TEST_TIMEOUT: 55m
 
   # EKS version testing (used by Go tests for version discovery)
-  MIN_VERSION: "1.31"
-  VERSION_ADDON: vpc-cni
 
   # Tool versions
   TFLINT_VERSION: v0.50.3
@@ -59,19 +57,16 @@ tasks:
     cmds:
       - terraform fmt -recursive
 
-  validate:
-    desc: "Validate Terraform configuration for all paths"
+  validate-tf:
+    desc: "Validate Terraform configuration (use '-- <dir>' for a single directory)"
     cmds:
-      - ./ci/validate.sh "{{.VALIDATE_PATHS}}"
-
-  validate-one:
-    desc: "Validate a single terraform directory"
-    summary: "Usage: task validate-one -- <directory>"
-    cmds:
-      - ./scripts/terraform.sh init "{{.CLI_ARGS}}" -backend=false
-      - terraform -chdir="{{.CLI_ARGS}}" validate
-    env:
-      PIPELINE_RUN_ID: "validate"
+      - |
+        if [ -n "{{.CLI_ARGS}}" ]; then
+          PIPELINE_RUN_ID=validate ./scripts/terraform.sh init "{{.CLI_ARGS}}" -backend=false
+          terraform -chdir="{{.CLI_ARGS}}" validate
+        else
+          ./ci/validate.sh "{{.VALIDATE_PATHS}}"
+        fi
 
   tflint-init:
     desc: "Initialize TFLint and download plugins"
@@ -86,29 +81,24 @@ tasks:
     cmds:
       - tflint --recursive --format=compact
 
-  trivy:
-    desc: "Run Trivy security and vulnerability scan"
+  security-scan:
+    desc: "Run Trivy security scan (use '-- json' for JSON output to trivy-results.json)"
     cmds:
-      - trivy config . --format table --severity CRITICAL,HIGH,MEDIUM --exit-code 1 --skip-dirs ".terraform" --skip-dirs "**/.terraform"
-
-  trivy-detailed:
-    desc: "Run Trivy with detailed JSON output"
-    cmds:
-      - trivy config . --format json --severity CRITICAL,HIGH,MEDIUM --output trivy-results.json
-      - echo "Results saved to trivy-results.json"
+      - |
+        if [ "{{.CLI_ARGS}}" = "json" ]; then
+          trivy config . --format json --severity CRITICAL,HIGH,MEDIUM --output trivy-results.json --skip-dirs ".terraform" --skip-dirs "**/.terraform"
+          echo "Results saved to trivy-results.json"
+        else
+          trivy config . --format table --severity CRITICAL,HIGH,MEDIUM --exit-code 1 --skip-dirs ".terraform" --skip-dirs "**/.terraform"
+        fi
 
   lint:
     desc: "Run all linting and security checks"
-    deps:
-      - fmt
-      - validate
-      - tflint
-      - trivy
-
-  lint-fix:
-    desc: "Fix formatting issues"
     cmds:
-      - task fmt-fix
+      - task: fmt-fix
+      - task: validate-tf
+      - task: tflint
+      - task: security-scan
 
   ##############################################################################
   # Unit Tests (Fast, No AWS)
@@ -129,37 +119,34 @@ tasks:
   ##############################################################################
 
   deploy:
-    desc: "Deploy a single infrastructure layer"
-    summary: "Usage: task deploy -- <layer_name>"
+    desc: "Deploy infrastructure (use '-- <layer>' for a single layer, or no args for all)"
     cmds:
-      - ./scripts/terraform.sh apply examples/{{.CLI_ARGS}}
-
-  deploy-all:
-    desc: "Deploy all layers in order (left to right)"
-    cmds:
-      - ./scripts/deploy_layers.sh apply "{{.LAYERS}}"
+      - |
+        if [ -n "{{.CLI_ARGS}}" ]; then
+          ./scripts/terraform.sh apply examples/{{.CLI_ARGS}}
+        else
+          ./scripts/deploy_layers.sh apply "{{.LAYERS}}"
+        fi
 
   destroy:
-    desc: "Destroy a single infrastructure layer"
-    summary: "Usage: task destroy -- <layer_name>"
+    desc: "Destroy infrastructure (use '-- <layer>' for a single layer, or no args for all)"
     cmds:
-      - ./scripts/terraform.sh destroy examples/{{.CLI_ARGS}}
+      - |
+        if [ -n "{{.CLI_ARGS}}" ]; then
+          ./scripts/terraform.sh destroy examples/{{.CLI_ARGS}}
+        else
+          ./scripts/deploy_layers.sh destroy "{{.LAYERS}}"
+        fi
 
-  destroy-all:
-    desc: "Destroy all layers in reverse order (right to left)"
+  plan:
+    desc: "Plan infrastructure changes (use '-- <layer>' for a single layer, or no args for all)"
     cmds:
-      - ./scripts/deploy_layers.sh destroy "{{.LAYERS}}"
-
-  plan-layer:
-    desc: "Plan a single infrastructure layer"
-    summary: "Usage: task plan-layer -- <layer_name>"
-    cmds:
-      - ./scripts/terraform.sh plan examples/{{.CLI_ARGS}}
-
-  plan-all:
-    desc: "Plan all layers in order"
-    cmds:
-      - ./scripts/deploy_layers.sh plan "{{.LAYERS}}"
+      - |
+        if [ -n "{{.CLI_ARGS}}" ]; then
+          ./scripts/terraform.sh plan examples/{{.CLI_ARGS}}
+        else
+          ./scripts/deploy_layers.sh plan "{{.LAYERS}}"
+        fi
 
   ##############################################################################
   # Integration Tests (Real AWS)
@@ -174,23 +161,16 @@ tasks:
     cmds:
       - ./ci/test_integration.sh {{if .CLI_ARGS}}-run {{.CLI_ARGS}}{{end}} -timeout {{.INTEGRATION_TEST_TIMEOUT}} {{.TEST_DIR}}
 
-  ##############################################################################
-  # Version Discovery (Optional)
-  # Remove this section if your project doesn't need parallel version testing.
-  ##############################################################################
-
-  discover-versions:
-    desc: "Discover supported versions from AWS and store in .task/versions.txt"
-    cmds:
-      - ./scripts/discover_versions.sh --addon {{.VERSION_ADDON}} --region {{.AWS_REGION}} --min {{.MIN_VERSION}}
 
   ##############################################################################
   # Combined Test Suites
   ##############################################################################
 
   test:
-    desc: "Run local tests (lint + unit tests)"
+    desc: "Run local tests (fmt + validate + lint + unit tests)"
     cmds:
+      - task: fmt
+      - task: validate-tf
       - task: lint
       - task: test-unit
 
@@ -222,6 +202,7 @@ tasks:
   setup:
     desc: "Setup development environment"
     cmds:
+      - task: version-check
       - task: init
       - task: deps
       - task: tflint-init
@@ -273,16 +254,16 @@ tasks:
     desc: "Run CI pipeline locally (like GitHub Actions)"
     cmds:
       - task: fmt
-      - task: validate
+      - task: validate-tf
       - task: tflint
-      - task: trivy
+      - task: security-scan
       - task: test-unit
 
   ##############################################################################
   # Debug Tasks
   ##############################################################################
 
-  debug-terraform:
+  debug-tf:
     desc: "Enable Terraform debug logging"
     cmds:
       - echo "export TF_LOG=DEBUG"
@@ -297,6 +278,7 @@ tasks:
 
   version-check:
     desc: "Check required tool versions"
+    internal: true
     cmds:
       - ./ci/version_check.sh
 
@@ -325,16 +307,6 @@ tasks:
       - rm -f .git/hooks/pre-commit
       - echo "Pre-commit hook removed"
 
-  ##############################################################################
-  # Quick Commands
-  ##############################################################################
-
-  quick-test:
-    desc: "Quick test run (fmt + validate + unit tests)"
-    cmds:
-      - task: fmt
-      - task: validate
-      - task: test-unit
 
   ##############################################################################
   # Helper Tasks (used by CI for matrix generation)

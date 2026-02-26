@@ -73,7 +73,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Terraform Validate
-        run: task validate
+        run: task validate-tf
 
   tflint:
     name: TFLint

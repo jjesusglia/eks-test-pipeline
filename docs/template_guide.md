@@ -91,10 +91,10 @@ func TestS3Bucket(t *testing.T) {
 
 ```bash
 task test          # lint + unit (no AWS)
-task test-run      # deploy-all is a no-op, runs TestS3Bucket which deploys its own infra
+task test-run      # deploy is a no-op, runs TestS3Bucket which deploys its own infra
 ```
 
-Since `LAYERS: ""`, `deploy-all` and `destroy-all` skip automatically. The Go test handles everything.
+Since `LAYERS: ""`, `deploy` and `destroy` skip automatically. The Go test handles everything.
 
 ### 6. CI changes
 
@@ -162,10 +162,10 @@ func TestRdsPostgres(t *testing.T) {
 
 ```bash
 # Manual workflow (iterate fast)
-task deploy-all                # Deploys vpc, then rds
+task deploy                    # Deploys vpc, then rds
 task test-integration          # Validates RDS — no deploy
 task test-integration          # Run again (fast!)
-task destroy-all               # Cleanup
+task destroy                   # Cleanup
 
 # Automated pipeline
 task test-run                  # Deploy → test → destroy in one command

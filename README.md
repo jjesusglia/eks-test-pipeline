@@ -117,10 +117,11 @@ Layers are infrastructure dependencies deployed in order before tests run.
 
 ```bash
 task deploy -- vpc        # Deploy a single layer
-task deploy-all           # Deploy all layers (left to right)
-task destroy-all          # Destroy all layers (right to left)
-task plan-layer -- vpc    # Plan a single layer
-task plan-all             # Plan all layers
+task deploy               # Deploy all layers (left to right)
+task destroy -- vpc       # Destroy a single layer
+task destroy              # Destroy all layers (right to left)
+task plan -- vpc          # Plan a single layer
+task plan                 # Plan all layers
 ```
 
 ### Output passing
@@ -154,9 +155,9 @@ task cleanup-project      # Delete ALL resources for this project (dry-run only)
 |---------|---------|
 | `task fmt` | Check Terraform formatting |
 | `task fmt-fix` | Fix formatting |
-| `task validate` | Validate Terraform syntax |
+| `task validate-tf` | Validate Terraform syntax |
 | `task tflint` | Run linter |
-| `task trivy` | Security scanning |
+| `task security-scan` | Security scanning (use `-- json` for JSON output) |
 | `task lint` | Run all checks |
 
 ### Testing
@@ -164,7 +165,7 @@ task cleanup-project      # Delete ALL resources for this project (dry-run only)
 | Command | Purpose | AWS Required |
 |---------|---------|:---:|
 | `task test-unit` | Unit tests (48 tests, ~3s) | No |
-| `task test` | Lint + unit tests | No |
+| `task test` | Fmt + validate-tf + lint + unit tests | No |
 | `task test-integration` | Deploy → test → destroy | Yes |
 | `task test-all` | Lint + unit + integration | Yes |
 | `task test-all-versions` | Parallel version testing | Yes |
@@ -176,7 +177,7 @@ task cleanup-project      # Delete ALL resources for this project (dry-run only)
 | `task setup` | Initialize dev environment |
 | `task ci` | Run CI pipeline locally |
 | `task clean` | Clean terraform state + go cache |
-| `task version-check` | Verify tool versions |
+| `task validate-tf -- <dir>` | Validate a single directory |
 | `task hook-install` | Install pre-commit hook |
 
 ## CI/CD
@@ -186,7 +187,7 @@ The GitHub Actions workflow (`.github/workflows/test.yml`) runs the same `task` 
 ### Simple pipeline (default)
 
 ```
-task fmt → task validate → task tflint → task trivy → task test-unit → task test-integration
+task fmt → task validate-tf → task tflint → task security-scan → task test-unit → task test-integration
 ```
 
 ### Version testing pipeline (opt-in)

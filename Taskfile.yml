@@ -21,10 +21,9 @@ vars:
 
   # Go test configuration
   TEST_DIR: test
-  INTEGRATION_TEST_PATTERN: TestEksClusterVersioned
-  INTEGRATION_TEST_TIMEOUT: 35m
+  INTEGRATION_TEST_TIMEOUT: 55m
 
-  # Version testing (optional, set MIN_VERSION to empty to disable)
+  # EKS version testing (used by Go tests for version discovery)
   MIN_VERSION: "1.31"
   VERSION_ADDON: vpc-cni
 
@@ -63,12 +62,7 @@ tasks:
   validate:
     desc: "Validate Terraform configuration for all paths"
     cmds:
-      - |
-        for path in {{.VALIDATE_PATHS}}; do
-          echo "=== Validating: $path ==="
-          cd "$path" && rm -rf .terraform && terraform init -backend=false > /dev/null 2>&1 && terraform validate
-          cd - > /dev/null
-        done
+      - ./ci/validate.sh "{{.VALIDATE_PATHS}}"
 
   validate-one:
     desc: "Validate a single terraform directory"
@@ -81,6 +75,7 @@ tasks:
 
   tflint-init:
     desc: "Initialize TFLint and download plugins"
+    internal: true
     cmds:
       - tflint --init
 
@@ -127,9 +122,7 @@ tasks:
   test-unit-coverage:
     desc: "Run unit tests with coverage report"
     cmds:
-      - cd {{.TEST_DIR}} && go test -v -cover -coverprofile=coverage.out ./unit/...
-      - cd {{.TEST_DIR}} && go tool cover -html=coverage.out -o coverage.html
-      - echo "Coverage report saved to {{.TEST_DIR}}/coverage.html"
+      - ./ci/test_unit.sh --coverage {{.TEST_DIR}}
 
   ##############################################################################
   # Layer Management (deploy/destroy infrastructure layers)
@@ -144,15 +137,7 @@ tasks:
   deploy-all:
     desc: "Deploy all layers in order (left to right)"
     cmds:
-      - |
-        [[ -z "{{.LAYERS}}" ]] && echo "No layers configured, skipping deploy." && exit 0
-        # Generate RunID once — all layers share this value
-        export PIPELINE_RUN_ID="${PIPELINE_RUN_ID:-local-$(date +%Y%m%d-%H%M%S)}"
-        echo "=== Deploy RunID: $PIPELINE_RUN_ID ==="
-        for layer in {{.LAYERS}}; do
-          echo "=== Deploying layer: $layer ==="
-          PIPELINE_RUN_ID="$PIPELINE_RUN_ID" task deploy -- "$layer"
-        done
+      - ./scripts/deploy_layers.sh apply "{{.LAYERS}}"
 
   destroy:
     desc: "Destroy a single infrastructure layer"
@@ -163,28 +148,7 @@ tasks:
   destroy-all:
     desc: "Destroy all layers in reverse order (right to left)"
     cmds:
-      - |
-        [[ -z "{{.LAYERS}}" ]] && echo "No layers configured, skipping destroy." && exit 0
-        for layer in $(echo "{{.LAYERS}}" | tr ' ' '\n' | awk '{a[NR]=$0} END{for(i=NR;i>=1;i--)print a[i]}'); do
-          echo "=== Destroying layer: $layer ==="
-          PIPELINE_RUN_ID="${PIPELINE_RUN_ID:-destroy}" task destroy -- "$layer" || true
-        done
-
-  destroy-versions:
-    desc: "Destroy all version workdirs from parallel version testing"
-    cmds:
-      - |
-        if [[ ! -d .task/versions ]]; then
-          echo "No version workdirs found."
-          exit 0
-        fi
-        for dir in .task/versions/eks-*/; do
-          [[ -d "$dir" ]] || continue
-          echo "=== Destroying: $dir ==="
-          terraform -chdir="$dir" destroy -auto-approve || true
-        done
-        echo "=== Cleaning version workdirs ==="
-        rm -rf .task/versions
+      - ./scripts/deploy_layers.sh destroy "{{.LAYERS}}"
 
   plan-layer:
     desc: "Plan a single infrastructure layer"
@@ -195,61 +159,20 @@ tasks:
   plan-all:
     desc: "Plan all layers in order"
     cmds:
-      - |
-        [[ -z "{{.LAYERS}}" ]] && echo "No layers configured, skipping plan." && exit 0
-        for layer in {{.LAYERS}}; do
-          echo "=== Planning layer: $layer ==="
-          task plan-layer -- "$layer"
-        done
+      - ./scripts/deploy_layers.sh plan "{{.LAYERS}}"
 
   ##############################################################################
   # Integration Tests (Real AWS)
   ##############################################################################
 
   test-integration:
-    desc: "Run tests against already-deployed infrastructure (no deploy/destroy)"
+    desc: "Run integration tests (Go tests handle full infra lifecycle)"
     summary: |
-      Runs tests against layers you deployed manually via 'task deploy -- vpc' etc.
-      Automatically loads layer outputs as TF_VAR_* env vars.
-      Override the test pattern: task test-integration -- TestMyCustomTest
-      Run all tests:              task test-integration -- Test
+      Go tests deploy VPC, discover EKS versions, deploy parallel EKS clusters,
+      validate, and destroy everything via defer. Only AWS credentials required.
+      Override the test pattern: task test-integration -- TestEksClusterComplete
     cmds:
-      - |
-        # Load outputs from all deployed layers
-        for output_file in .task/*.outputs.json; do
-          [[ -f "$output_file" ]] || continue
-          echo "--- Loading outputs from: $output_file"
-          eval "$(./scripts/load_layer_outputs.sh "$output_file")"
-        done
-        PATTERN="{{if .CLI_ARGS}}{{.CLI_ARGS}}{{else}}{{.INTEGRATION_TEST_PATTERN}}{{end}}"
-        echo "--- Running: go test -run $PATTERN"
-        cd {{.TEST_DIR}} && go test -v -run "$PATTERN" -timeout {{.INTEGRATION_TEST_TIMEOUT}} ./integration/...
-
-  test-run:
-    desc: "Full pipeline: deploy layers, run tests, destroy layers"
-    prompt: "This will deploy real AWS resources. Continue?"
-    cmds:
-      - task: deploy-all
-      - defer: { task: destroy-all }
-      - task: test-integration
-
-  test-versions:
-    desc: "Run parallel version tests against already-deployed VPC"
-    summary: |
-      Discovers versions and runs parallel EKS tests against your deployed VPC.
-      Deploy VPC first: task deploy -- vpc
-    cmds:
-      - task: discover-versions
-      - ./scripts/test_versions.sh
-
-  test-run-versions:
-    desc: "Full pipeline: deploy VPC, parallel version tests, destroy VPC"
-    prompt: "This will deploy several clusters and versions. Continue?"
-    cmds:
-      - task: discover-versions
-      - cmd: ./scripts/terraform.sh apply examples/vpc
-      - defer: { cmd: ./scripts/terraform.sh destroy examples/vpc || true }
-      - ./scripts/test_versions.sh
+      - ./ci/test_integration.sh {{if .CLI_ARGS}}-run {{.CLI_ARGS}}{{end}} -timeout {{.INTEGRATION_TEST_TIMEOUT}} {{.TEST_DIR}}
 
   ##############################################################################
   # Version Discovery (Optional)
@@ -259,17 +182,7 @@ tasks:
   discover-versions:
     desc: "Discover supported versions from AWS and store in .task/versions.txt"
     cmds:
-      - |
-        VERSIONS=$(aws eks describe-addon-versions --addon-name {{.VERSION_ADDON}} \
-          --region {{.AWS_REGION}} \
-          --query 'addons[].addonVersions[].compatibilities[].clusterVersion' \
-          --output text 2>/dev/null | tr '\t' '\n' | sort -V | uniq | \
-          awk -v min="{{.MIN_VERSION}}" '$0 >= min' | head -4) || \
-        VERSIONS="1.31 1.32"
-
-        mkdir -p .task
-        echo "$VERSIONS" > .task/versions.txt
-        echo "Discovered versions: $(cat .task/versions.txt)"
+      - ./scripts/discover_versions.sh --addon {{.VERSION_ADDON}} --region {{.AWS_REGION}} --min {{.MIN_VERSION}}
 
   ##############################################################################
   # Combined Test Suites
@@ -282,20 +195,12 @@ tasks:
       - task: test-unit
 
   test-all:
-    desc: "Run everything: lint + unit + deploy + integration + destroy"
+    desc: "Run everything: lint + unit + integration (deploys real AWS resources)"
     prompt: "This will deploy real AWS resources. Continue?"
     cmds:
       - task: lint
       - task: test-unit
-      - task: test-run
-
-  test-all-versions:
-    desc: "Run everything with all version matrix"
-    prompt: "This will deploy several clusters and versions. Continue?"
-    cmds:
-      - task: lint
-      - task: test-unit
-      - task: test-run-versions
+      - task: test-integration
 
   ##############################################################################
   # Initialization Tasks
@@ -303,16 +208,13 @@ tasks:
 
   init:
     desc: "Initialize all Terraform configurations"
+    internal: true
     cmds:
-      - |
-        for path in {{.VALIDATE_PATHS}}; do
-          echo "=== Initializing: $path ==="
-          cd "$path" && terraform init -backend=false > /dev/null 2>&1
-          cd - > /dev/null
-        done
+      - ./ci/validate.sh --init-only "{{.VALIDATE_PATHS}}"
 
   deps:
     desc: "Download Go dependencies"
+    internal: true
     cmds:
       - cd {{.TEST_DIR}} && go mod download
       - cd {{.TEST_DIR}} && go mod tidy
@@ -329,59 +231,25 @@ tasks:
   ##############################################################################
 
   clean:
-    desc: "Clean local Terraform state and cache"
-    cmds:
-      - cmd: find . -type d -name ".terraform" -exec rm -rf {} + 2>/dev/null || true
-      - cmd: find . -type f -name ".terraform.lock.hcl" -delete
-      - cmd: find . -type f -name "*.tfstate*" -delete
-      - cmd: rm -rf .task
-      - cmd: cd {{.TEST_DIR}} && go clean -cache -testcache
-
-  clean-all:
     desc: "Deep clean (Terraform state + Go cache + .tflint cache)"
     cmds:
-      - task: clean
-      - cmd: rm -rf ~/.tflint.d 2>/dev/null || true
+      - ./scripts/clean.sh --all
+
+  cleanup-fallback:
+    desc: "Safety net: cloud-nuke cleanup scoped to Pipeline + RunID (used by CI after integration tests)"
+    internal: true
+    cmds:
+      - ./ci/cleanup.sh fallback --region {{.AWS_REGION}} --project {{.PROJECT_NAME}} --run-id ${PIPELINE_RUN_ID:-unknown}
 
   cleanup-run:
     desc: "Clean orphaned resources from current/last run (Pipeline + RunID). Add '-- force' to delete."
     cmds:
-      - |
-        if [[ -f .task/run-metadata.env ]]; then
-          source .task/run-metadata.env
-        else
-          echo "No run metadata found. Skipping."
-          exit 0
-        fi
-        mkdir -p .task
-        sed -e "s|PLACEHOLDER_PIPELINE|${PIPELINE_TAG}|g" \
-            -e "s|PLACEHOLDER_RUN_ID|${PIPELINE_RUN_ID}|g" \
-            .cloud-nuke-config.template.yml > .task/cloud-nuke-config.yml
-        echo "=== Scope: Pipeline=${PIPELINE_TAG}, RunID=${PIPELINE_RUN_ID} ==="
-        if [[ "{{.CLI_ARGS}}" == "force" ]]; then
-          cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --force
-        else
-          cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --dry-run --force
-          echo ""
-          echo "DRY RUN. To delete: task cleanup-run -- force"
-        fi
+      - ./ci/cleanup.sh run --region {{.AWS_REGION}} {{if eq .CLI_ARGS "force"}}--force{{end}}
 
   cleanup-project:
     desc: "Clean ALL resources for this project (any RunID). Add '-- force' to delete."
     cmds:
-      - |
-        mkdir -p .task
-        sed -e "s|PLACEHOLDER_PIPELINE|{{.PROJECT_NAME}}|g" \
-            -e "/RunID/d" \
-            .cloud-nuke-config.template.yml > .task/cloud-nuke-config.yml
-        echo "=== Scope: Pipeline={{.PROJECT_NAME}} (ALL runs) ==="
-        if [[ "{{.CLI_ARGS}}" == "force" ]]; then
-          cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --force
-        else
-          cloud-nuke aws --config .task/cloud-nuke-config.yml --region {{.AWS_REGION}} --dry-run --force
-          echo ""
-          echo "DRY RUN. To delete: task cleanup-project -- force"
-        fi
+      - ./ci/cleanup.sh project --region {{.AWS_REGION}} --project {{.PROJECT_NAME}} {{if eq .CLI_ARGS "force"}}--force{{end}}
 
   ##############################################################################
   # Development Workflows
@@ -430,13 +298,7 @@ tasks:
   version-check:
     desc: "Check required tool versions"
     cmds:
-      - echo "Checking versions..."
-      - echo "Terraform:" && terraform version -json | grep terraform_version || terraform version
-      - echo "Go:" && go version
-      - echo "TFLint:" && tflint --version || echo "TFLint not installed"
-      - echo "Trivy:" && trivy --version || echo "Trivy not installed"
-      - echo "Task:" && task --version || echo "Task not installed"
-      - echo "jq:" && jq --version || echo "jq not installed"
+      - ./ci/version_check.sh
 
   ##############################################################################
   # Pre-commit Hooks
@@ -480,6 +342,7 @@ tasks:
 
   print-validate-paths:
     desc: "Print validate paths (used by CI to generate matrix)"
+    internal: true
     silent: true
     cmds:
       - echo "{{.VALIDATE_PATHS}}"

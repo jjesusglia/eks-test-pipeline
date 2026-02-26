@@ -71,7 +71,7 @@ module "s3" {
 }
 ```
 
-### 4. Go test (self-contained, like TestEksClusterComplete)
+### 4. Go test (self-contained)
 
 ```go
 func TestS3Bucket(t *testing.T) {
@@ -234,7 +234,6 @@ When copying this template for a simple project:
 | No version matrix testing | `scripts/test_versions.sh`, `discover-versions` task, `test-run-versions` task |
 | No VPC dependency | `examples/vpc/` |
 | No EKS | `examples/eks/`, `modules/eks-cluster/` |
-| Self-contained tests only | Keep `examples/complete/` pattern, delete layer examples |
 
 ## What to Keep
 
@@ -251,7 +250,7 @@ Taskfile.yml                  # All task commands
 ## Checklist for New Projects
 
 1. [ ] Copy the repo
-2. [ ] Delete `modules/eks-cluster/`, `examples/eks/`, `examples/vpc/`, `examples/complete/`
+2. [ ] Delete `modules/eks-cluster/`, `examples/eks/`, `examples/vpc/`
 3. [ ] Add your module under `modules/`
 4. [ ] Create test fixture(s) under `examples/` with `pipeline_tags` and `pipeline_run_hash` variables
 5. [ ] Set `PROJECT_NAME`, `LAYERS`, `VALIDATE_PATHS`, `INTEGRATION_TEST_PATTERN` in Taskfile

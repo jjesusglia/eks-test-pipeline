@@ -207,12 +207,10 @@ Static analysis → Unit tests → Discover versions → Deploy VPC
 │   └── eks-cluster/               # REFERENCE: Replace with your module
 ├── examples/
 │   ├── vpc/                       # Layer: VPC infrastructure
-│   ├── eks/                       # Layer: EKS cluster (version testing)
-│   └── complete/                  # Self-contained fixture (VPC + EKS)
+│   └── eks/                       # Layer: EKS cluster (version testing)
 ├── test/
 │   ├── integration/
-│   │   ├── eks_cluster_test.go    # REFERENCE: Integration tests
-│   │   ├── eks_version_test.go    # REFERENCE: Version testing
+│   │   ├── eks_version_test.go    # REFERENCE: Version matrix testing
 │   │   └── helpers_test.go        # Shared test helpers
 │   └── unit/
 │       ├── validation.go          # Validation functions

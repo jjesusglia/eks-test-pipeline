@@ -38,7 +38,7 @@ Reusable Terraform module wrapping `terraform-aws-modules/eks/aws` v20.x. Provid
 ## Dependencies
 
 ### Internal
-- Referenced by `examples/complete/`, `examples/eks/` via relative path `../../modules/eks-cluster`
+- Referenced by `examples/eks/` via relative path `../../modules/eks-cluster`
 
 ### External
 - `terraform-aws-modules/eks/aws` ~> 20.8 (upstream EKS module)

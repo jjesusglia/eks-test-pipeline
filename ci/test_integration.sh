@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ci/test_integration.sh — Run Go integration tests with configurable timeout and pattern
 # Usage: ci/test_integration.sh [options] <test-dir>
-#   -run <pattern>       Test name pattern (e.g., TestEksClusterComplete)
+#   -run <pattern>       Test name pattern (e.g., TestEksClusterVersionMatrix)
 #   -timeout <duration>  Test timeout (default: 55m)
 #   <test-dir>           Directory containing Go tests
 #
-# Example: ci/test_integration.sh -run TestEksClusterComplete -timeout 60m test
+# Example: ci/test_integration.sh -run TestEksClusterVersionMatrix -timeout 60m test
 # Example: ci/test_integration.sh test
 #
 # Reusable: no project-specific logic. Works for any Go integration test suite.

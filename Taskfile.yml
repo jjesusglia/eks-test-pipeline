@@ -157,7 +157,7 @@ tasks:
     summary: |
       Go tests deploy VPC, discover EKS versions, deploy parallel EKS clusters,
       validate, and destroy everything via defer. Only AWS credentials required.
-      Override the test pattern: task test-integration -- TestEksClusterComplete
+      Override the test pattern: task test-integration -- TestEksClusterVersionMatrix
     cmds:
       - ./ci/test_integration.sh {{if .CLI_ARGS}}-run {{.CLI_ARGS}}{{end}} -timeout {{.INTEGRATION_TEST_TIMEOUT}} {{.TEST_DIR}}
 

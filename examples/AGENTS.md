@@ -10,7 +10,6 @@ Terraform example configurations used as test fixtures. Each example deploys rea
 
 | Directory | Purpose |
 |-----------|---------|
-| `complete/` | Full VPC + EKS deployment fixture (see `complete/AGENTS.md`) |
 | `eks/` | EKS-only fixture using pre-deployed VPC (see `eks/AGENTS.md`) |
 | `vpc/` | Standalone VPC fixture for shared infrastructure (see `vpc/AGENTS.md`) |
 

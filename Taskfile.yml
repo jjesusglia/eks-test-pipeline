@@ -208,6 +208,7 @@ tasks:
       - task: tflint-init
       - git config --unset-all core.hooksPath || true
       - pre-commit install
+      - pre-commit install --hook-type pre-push
 
   ##############################################################################
   # Cleanup Tasks

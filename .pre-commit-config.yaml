@@ -5,6 +5,9 @@ repos:
       - id: check-yaml
       - id: trailing-whitespace
       - id: end-of-file-fixer
+      - id: no-commit-to-branch
+        args: [--branch, master]
+        stages: [pre-push]
 
   - repo: https://github.com/antonbabenko/pre-commit-terraform
     rev: v1.105.0

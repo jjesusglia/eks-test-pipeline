@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# DEPRECATED: This script is replaced by TestEksClusterVersionMatrix in
+# test/integration/eks_version_test.go. Go's t.Parallel() handles the
+# parallelism and defer terraform.Destroy() handles cleanup.
+#
+# Run instead: cd test && go test -v -timeout 55m -run TestEksClusterVersionMatrix ./integration/...
+#
 # scripts/test_versions.sh — Run tests across multiple versions in parallel
 # Usage: ./scripts/test_versions.sh [versions_file]
 #

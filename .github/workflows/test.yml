@@ -39,10 +39,25 @@ jobs:
   #############################################################################
   terraform-fmt:
     name: Terraform Format
-    if: github.event_name != 'issue_comment'
+    if: github.event_name != 'issue_comment' || contains(github.event.comment.body, '/test-all')
     runs-on: ubuntu-latest
     steps:
+      - name: React to /test-all comment
+        if: github.event_name == 'issue_comment'
+        run: |
+          gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content=rocket
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout PR branch
+        if: github.event_name == 'issue_comment'
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/merge
+
       - name: Checkout
+        if: github.event_name != 'issue_comment'
         uses: actions/checkout@v4
 
       - name: Setup Terraform
@@ -61,10 +76,17 @@ jobs:
 
   terraform-validate:
     name: Terraform Validate
-    if: github.event_name != 'issue_comment'
+    if: github.event_name != 'issue_comment' || contains(github.event.comment.body, '/test-all')
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout PR branch
+        if: github.event_name == 'issue_comment'
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/merge
+
       - name: Checkout
+        if: github.event_name != 'issue_comment'
         uses: actions/checkout@v4
 
       - name: Setup Terraform
@@ -83,10 +105,17 @@ jobs:
 
   tflint:
     name: TFLint
-    if: github.event_name != 'issue_comment'
+    if: github.event_name != 'issue_comment' || contains(github.event.comment.body, '/test-all')
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout PR branch
+        if: github.event_name == 'issue_comment'
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/merge
+
       - name: Checkout
+        if: github.event_name != 'issue_comment'
         uses: actions/checkout@v4
 
       - name: Setup Terraform
@@ -110,7 +139,7 @@ jobs:
 
   trivy:
     name: Trivy Security Scan
-    if: github.event_name != 'issue_comment'
+    if: github.event_name != 'issue_comment' || contains(github.event.comment.body, '/test-all')
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -119,7 +148,14 @@ jobs:
       checks: write
 
     steps:
+      - name: Checkout PR branch
+        if: github.event_name == 'issue_comment'
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/merge
+
       - name: Checkout
+        if: github.event_name != 'issue_comment'
         uses: actions/checkout@v4
 
       - name: Setup Task
@@ -151,11 +187,18 @@ jobs:
 
   tests-unit:
     name: Unit Tests
-    if: github.event_name != 'issue_comment'
+    if: github.event_name != 'issue_comment' || contains(github.event.comment.body, '/test-all')
     runs-on: ubuntu-latest
     needs: [terraform-fmt, terraform-validate, tflint, trivy]
     steps:
+      - name: Checkout PR branch
+        if: github.event_name == 'issue_comment'
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/merge
+
       - name: Checkout
+        if: github.event_name != 'issue_comment'
         uses: actions/checkout@v4
 
       - name: Setup Go
@@ -193,10 +236,12 @@ jobs:
       always()
       && (needs.tests-unit.result == 'success' || needs.tests-unit.result == 'skipped')
       && (
-        contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
-        || (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/test-integration'))
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/test-integration'))
+        || (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/test-all'))
       )
     timeout-minutes: 60
+    outputs:
+      test_results: ${{ steps.parse-results.outputs.results }}
     env:
       PIPELINE_RUN_ID: "${{ github.run_id }}"
     steps:
@@ -263,7 +308,10 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run integration tests
-        run: task test-integration
+        id: run-tests
+        run: |
+          set -o pipefail
+          task test-integration 2>&1 | tee /tmp/test-output.log
         env:
           AWS_REGION: ${{ env.AWS_REGION }}
           MIN_EKS_VERSION: ${{ env.MIN_EKS_VERSION }}
@@ -276,6 +324,32 @@ jobs:
           name: test-logs-${{ github.run_id }}
           path: test/*.log
           retention-days: 7
+
+      - name: Parse test results
+        id: parse-results
+        if: always() && steps.run-tests.outcome != 'skipped'
+        run: |
+          if [[ ! -f /tmp/test-output.log ]]; then
+            echo "results=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          RESULTS=""
+          while IFS= read -r line; do
+            if [[ "$line" =~ ---\ (PASS|FAIL):.*versions/EKS_([0-9_]+) ]]; then
+              status="${BASH_REMATCH[1]}"
+              version="${BASH_REMATCH[2]//_/.}"
+              duration=""
+              if [[ "$line" =~ \(([0-9.]+)s\) ]]; then
+                duration="${BASH_REMATCH[1]}s"
+              fi
+              RESULTS="${RESULTS}${status}|${version}|${duration}\n"
+            fi
+          done < /tmp/test-output.log
+          {
+            echo 'results<<EOF'
+            echo -e "$RESULTS"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set PR commit status (result)
         if: always() && steps.pr-sha.outputs.sha
@@ -295,6 +369,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [integration-test]
     if: always() && needs.integration-test.result != 'skipped'
+    outputs:
+      cleanup_summary: ${{ steps.parse-cleanup.outputs.summary }}
     steps:
       - name: Resolve PR head SHA
         id: pr-sha
@@ -332,11 +408,29 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run cleanup
-        run: task cleanup-run
+        id: run-cleanup
+        run: |
+          set -o pipefail
+          task cleanup-run 2>&1 | tee /tmp/cleanup-output.log || true
         env:
           PIPELINE_RUN_ID: "${{ github.run_id }}"
           CLOUD_NUKE_VERSION: v0.46.0
           DISABLE_TELEMETRY: "true"
+
+      - name: Parse cleanup results
+        id: parse-cleanup
+        if: always()
+        run: |
+          if [[ -f /tmp/cleanup-output.log ]]; then
+            SUMMARY=$(tail -20 /tmp/cleanup-output.log)
+          else
+            SUMMARY="No cleanup output captured"
+          fi
+          {
+            echo 'summary<<EOF'
+            echo "$SUMMARY"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set PR commit status (result)
         if: always() && steps.pr-sha.outputs.sha
@@ -364,9 +458,14 @@ jobs:
       - cleanup-fallback
     if: always()
     steps:
-      - name: Check all jobs
+      - name: Generate summary report
+        id: report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TEST_RESULTS: ${{ needs.integration-test.outputs.test_results }}
+          CLEANUP_SUMMARY: ${{ needs.cleanup-fallback.outputs.cleanup_summary }}
         run: |
-          # Map results to emojis
+          # ── Helpers ──────────────────────────────────────────────────────
           status_icon() {
             case "$1" in
               success)   echo "✅" ;;
@@ -377,6 +476,7 @@ jobs:
             esac
           }
 
+          # ── Job results ──────────────────────────────────────────────────
           FMT="${{ needs.terraform-fmt.result }}"
           VALIDATE="${{ needs.terraform-validate.result }}"
           TFLINT="${{ needs.tflint.result }}"
@@ -385,49 +485,161 @@ jobs:
           INTEGRATION="${{ needs.integration-test.result }}"
           CLEANUP="${{ needs.cleanup-fallback.result }}"
 
-          # Add trigger context note
           EVENT="${{ github.event_name }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
+
+          # ── Build report ─────────────────────────────────────────────────
+          REPORT=$(mktemp)
           {
             echo "## Pipeline Results"
             echo ""
-            if [[ "$EVENT" == "issue_comment" ]]; then
+            echo "**Commit:** \`${SHORT_SHA}\` · **Branch:** \`${{ github.ref_name }}\` · **Actor:** @${{ github.actor }} · [View run →](${RUN_URL})"
+            echo ""
+
+            # Trigger context
+            COMMENT_BODY="${{ github.event.comment.body }}"
+            if [[ "$EVENT" == "issue_comment" && "$COMMENT_BODY" == *"/test-all"* ]]; then
+              echo "> Triggered by \`/test-all\` comment — full pipeline"
+            elif [[ "$EVENT" == "issue_comment" ]]; then
               echo "> Triggered by \`/test-integration\` comment — static analysis and unit tests skipped"
-              echo ""
             elif [[ "$EVENT" == "push" ]]; then
               echo "> Triggered by push to \`${{ github.ref_name }}\`"
-              echo ""
             else
               echo "> Triggered by pull request"
+            fi
+            echo ""
+
+            # ── Static Analysis ──────────────────────────────────────────
+            echo "### Static Analysis"
+            echo ""
+            echo "| Job | Result |"
+            echo "|-----|--------|"
+            echo "| Terraform Format | $(status_icon $FMT) $FMT |"
+            echo "| Terraform Validate | $(status_icon $VALIDATE) $VALIDATE |"
+            echo "| TFLint | $(status_icon $TFLINT) $TFLINT |"
+            echo "| Trivy Security Scan | $(status_icon $TRIVY) $TRIVY |"
+            echo ""
+
+            # ── Tests ────────────────────────────────────────────────────
+            echo "### Tests"
+            echo ""
+            echo "| Job | Result |"
+            echo "|-----|--------|"
+            echo "| Unit Tests | $(status_icon $UNIT) $UNIT |"
+            echo "| Integration Tests | $(status_icon $INTEGRATION) $INTEGRATION |"
+            echo ""
+
+            # Integration test breakdown (collapsible)
+            if [[ -n "$TEST_RESULTS" && "$INTEGRATION" != "skipped" ]]; then
+              echo "<details>"
+              echo "<summary>📋 EKS Version Breakdown</summary>"
+              echo ""
+              echo "| Version | Result | Duration |"
+              echo "|---------|--------|----------|"
+              while IFS='|' read -r result version duration; do
+                [[ -z "$result" ]] && continue
+                if [[ "$result" == "PASS" ]]; then
+                  icon="✅"
+                else
+                  icon="❌"
+                fi
+                echo "| ${version} | ${icon} ${result} | ${duration} |"
+              done <<< "$TEST_RESULTS"
+              echo ""
+              echo "</details>"
               echo ""
             fi
-            echo "| Stage | Job | Result |"
-            echo "|-------|-----|--------|"
-            echo "| Static Analysis | Terraform Format | $(status_icon $FMT) $FMT |"
-            echo "| Static Analysis | Terraform Validate | $(status_icon $VALIDATE) $VALIDATE |"
-            echo "| Static Analysis | TFLint | $(status_icon $TFLINT) $TFLINT |"
-            echo "| Static Analysis | Trivy Security Scan | $(status_icon $TRIVY) $TRIVY |"
-            echo "| Tests | Unit Tests | $(status_icon $UNIT) $UNIT |"
-            echo "| Tests | Integration Tests | $(status_icon $INTEGRATION) $INTEGRATION |"
-            echo "| Cleanup | cloud-nuke | $(status_icon $CLEANUP) $CLEANUP |"
-          } >> "$GITHUB_STEP_SUMMARY"
 
-          # Fail if any required static analysis or unit test job failed (skipped is OK for comment triggers)
-          if [[ "$FMT" == "failure" ]] || \
-             [[ "$VALIDATE" == "failure" ]] || \
-             [[ "$TFLINT" == "failure" ]] || \
-             [[ "$TRIVY" == "failure" ]] || \
-             [[ "$UNIT" == "failure" ]]; then
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "> **❌ One or more required jobs failed**" >> "$GITHUB_STEP_SUMMARY"
+            # Artifact notice
+            if [[ "$INTEGRATION" == "failure" ]]; then
+              echo "> 📎 **Test logs uploaded** — check the [Artifacts tab](${RUN_URL}#artifacts) in this workflow run"
+              echo ""
+            fi
+
+            # ── Cleanup ──────────────────────────────────────────────────
+            if [[ "$CLEANUP" != "skipped" ]]; then
+              echo "### Cleanup"
+              echo ""
+              echo "| Job | Result |"
+              echo "|-----|--------|"
+              echo "| cloud-nuke | $(status_icon $CLEANUP) $CLEANUP |"
+              echo ""
+
+              if [[ -n "$CLEANUP_SUMMARY" ]]; then
+                echo "<details>"
+                echo "<summary>🧹 Cleanup Details</summary>"
+                echo ""
+                echo '```'
+                echo "$CLEANUP_SUMMARY"
+                echo '```'
+                echo ""
+                echo "</details>"
+                echo ""
+              fi
+            fi
+
+            # ── Verdict ──────────────────────────────────────────────────
+            FAILED=false
+            if [[ "$FMT" == "failure" ]] || \
+               [[ "$VALIDATE" == "failure" ]] || \
+               [[ "$TFLINT" == "failure" ]] || \
+               [[ "$TRIVY" == "failure" ]] || \
+               [[ "$UNIT" == "failure" ]]; then
+              echo "> **❌ One or more required jobs failed** — [view logs](${RUN_URL})"
+              FAILED=true
+            elif [[ "$INTEGRATION" == "failure" ]]; then
+              echo "> **❌ Integration tests failed** — [view logs](${RUN_URL})"
+              FAILED=true
+            else
+              echo "> **✅ All required checks passed**"
+            fi
+          } > "$REPORT"
+
+          # Write to both step summary and file for PR comment
+          cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+          cp "$REPORT" /tmp/summary-report.md
+
+          # Exit with failure if any required job failed
+          if [[ "$FAILED" == "true" ]]; then
             exit 1
           fi
 
-          # Fail if integration tests failed
-          if [[ "$INTEGRATION" == "failure" ]]; then
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "> **❌ Integration tests failed**" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+      - name: Post summary to PR
+        if: >-
+          always() &&
+          (github.event_name == 'pull_request' || github.event_name == 'issue_comment')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Determine PR number
+          if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+            PR_NUMBER="${{ github.event.issue.number }}"
+          else
+            PR_NUMBER="${{ github.event.pull_request.number }}"
           fi
 
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "> **✅ All required checks passed**" >> "$GITHUB_STEP_SUMMARY"
+          [[ -z "$PR_NUMBER" ]] && { echo "No PR number found, skipping comment"; exit 0; }
+
+          # Prepare comment body with marker for idempotent updates
+          MARKER="<!-- pipeline-summary -->"
+          {
+            echo "$MARKER"
+            cat /tmp/summary-report.md
+          } > /tmp/pr-comment.md
+
+          # Find existing pipeline summary comment to update (avoid duplicates)
+          EXISTING=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+            --jq ".[] | select(.body | startswith(\"${MARKER}\")) | .id" 2>/dev/null | head -1)
+
+          if [[ -n "$EXISTING" ]]; then
+            # Update existing comment via API with JSON body
+            jq -n --rawfile body /tmp/pr-comment.md '{"body": $body}' | \
+              gh api "repos/${{ github.repository }}/issues/comments/${EXISTING}" \
+                -X PATCH --input -
+            echo "Updated existing PR comment ${EXISTING}"
+          else
+            gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body-file /tmp/pr-comment.md
+            echo "Posted new PR comment"
+          fi

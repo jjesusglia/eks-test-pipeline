@@ -13,7 +13,8 @@ vars:
   TEST_DIR: test
   INTEGRATION_TEST_TIMEOUT: 55m
 
-  # Tool versions
+  # Required tools (checked by 'task setup')
+  REQUIRED_TOOLS: terraform go tflint trivy task jq pre-commit
   TFLINT_VERSION: v0.50.3
 
 # Export Taskfile vars as environment variables for CI scripts and Go tests
@@ -95,10 +96,13 @@ tasks:
     cmds:
       - task: lint
       - |
+        cd {{.TEST_DIR}}
         if [ "{{.CLI_ARGS}}" = "coverage" ]; then
-          ./ci/test_unit.sh --coverage {{.TEST_DIR}}
+          go test -v -cover -coverprofile=coverage.out ./unit/...
+          go tool cover -html=coverage.out -o coverage.html
+          echo "Coverage report: {{.TEST_DIR}}/coverage.html"
         else
-          cd {{.TEST_DIR}} && go test -v ./unit/...
+          go test -v ./unit/...
         fi
 
   test-integration:
@@ -108,7 +112,7 @@ tasks:
       validate, and destroy everything via defer. Only AWS credentials required.
       Override the test pattern: task test-integration -- TestEksClusterVersionMatrix
     cmds:
-      - ./ci/test_integration.sh {{if .CLI_ARGS}}-run {{.CLI_ARGS}}{{end}} -timeout {{.INTEGRATION_TEST_TIMEOUT}} {{.TEST_DIR}}
+      - cd {{.TEST_DIR}} && go test -v {{if .CLI_ARGS}}-run {{.CLI_ARGS}}{{end}} -timeout {{.INTEGRATION_TEST_TIMEOUT}} ./integration/...
 
   test-all:
     desc: "Run everything: lint + unit + integration (deploys real AWS resources)"
@@ -121,12 +125,6 @@ tasks:
   # Initialization Tasks
   ##############################################################################
 
-  init:
-    desc: "Initialize all Terraform configurations"
-    internal: true
-    cmds:
-      - ./ci/validate.sh --init-only "{{.VALIDATE_PATHS}}"
-
   deps:
     desc: "Download Go dependencies"
     internal: true
@@ -138,7 +136,7 @@ tasks:
     desc: "Setup development environment"
     cmds:
       - task: version-check
-      - task: init
+      - task: validate-tf
       - task: deps
       - task: tflint-init
       - git config --unset-all core.hooksPath || true
@@ -190,15 +188,13 @@ tasks:
     desc: "Check required tool versions"
     internal: true
     cmds:
-      - ./ci/version_check.sh
-
-  ##############################################################################
-  # Helper Tasks (used by CI for matrix generation)
-  ##############################################################################
-
-  print-validate-paths:
-    desc: "Print validate paths (used by CI to generate matrix)"
-    internal: true
-    silent: true
-    cmds:
-      - echo "{{.VALIDATE_PATHS}}"
+      - |
+        echo "Checking tool versions..."
+        for name in {{.REQUIRED_TOOLS}}; do
+          printf "  %-12s " "${name}:"
+          if [ "$name" = "go" ]; then
+            go version 2>&1 | head -1 || echo "not installed"
+          else
+            "$name" --version 2>&1 | head -1 || echo "not installed"
+          fi
+        done

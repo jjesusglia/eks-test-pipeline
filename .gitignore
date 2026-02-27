@@ -1,6 +1,8 @@
 .claude
-.Claude.md
 .omc
+AGENTS.md
+**/AGENTS.md
+**/CLAUDE.md
 
 # Trivy
 trivy-results.json

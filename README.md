@@ -27,6 +27,7 @@ cd my-terraform-module-tests
 ### 2. Replace the module
 
 Delete `modules/eks-cluster/` and add your own Terraform module under `modules/`.
+See [docs/template_guide.md](docs/template_guide.md) for detailed examples (S3, RDS, Lambda) and a checklist for new projects.
 
 ### 3. Create test fixtures
 

@@ -224,10 +224,9 @@ When copying this template for a simpler project:
 Always keep these — they're the generic framework:
 
 ```
-Taskfile.yml                     # All task commands
-ci/test_integration.sh           # Go test runner
+Taskfile.yml                     # All task commands (includes test runners inline)
+ci/validate.sh                   # Terraform init + validate
 ci/cleanup.sh                    # Cloud-nuke safety net
-ci/validate.sh                   # Terraform validation
 scripts/clean.sh                 # Deep clean utility
 .github/workflows/test.yml      # CI pipeline
 .cloud-nuke-config.template.yml # Cleanup safety net

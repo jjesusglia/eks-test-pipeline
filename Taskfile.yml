@@ -91,10 +91,9 @@ tasks:
   # Tests
   ##############################################################################
 
-  test:
-    desc: "Run local tests (lint + unit). Use '-- coverage' for coverage report"
+  test-unit:
+    desc: "Run unit tests. Use '-- coverage' for coverage report"
     cmds:
-      - task: lint
       - |
         cd {{.TEST_DIR}}
         if [ "{{.CLI_ARGS}}" = "coverage" ]; then
@@ -104,6 +103,12 @@ tasks:
         else
           go test -v ./unit/...
         fi
+
+  test:
+    desc: "Run local tests (lint + unit)"
+    cmds:
+      - task: lint
+      - task: test-unit
 
   test-integration:
     desc: "Run integration tests (Go tests handle full infra lifecycle)"

@@ -31,6 +31,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  statuses: write
 
 jobs:
   #############################################################################
@@ -103,9 +104,6 @@ jobs:
         uses: terraform-linters/setup-tflint@v4
         with:
           tflint_version: ${{ env.TFLINT_VERSION }}
-
-      - name: Initialize TFLint
-        run: tflint --init
 
       - name: Run TFLint
         run: task tflint
@@ -195,8 +193,7 @@ jobs:
       always()
       && (needs.tests-unit.result == 'success' || needs.tests-unit.result == 'skipped')
       && (
-        github.ref == 'refs/heads/master'
-        || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
+        contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
         || (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/test-integration'))
       )
     timeout-minutes: 60
@@ -210,6 +207,25 @@ jobs:
             -f content=rocket
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve PR head SHA
+        id: pr-sha
+        if: github.event_name == 'issue_comment'
+        run: |
+          SHA=$(gh pr view ${{ github.event.issue.number }} --repo ${{ github.repository }} --json headRefOid -q .headRefOid)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set PR commit status (pending)
+        if: steps.pr-sha.outputs.sha
+        uses: myrotvorets/set-commit-status-action@v2.0.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ steps.pr-sha.outputs.sha }}
+          status: pending
+          context: Integration Tests
+          description: Integration tests running...
 
       - name: Checkout PR branch
         if: github.event_name == 'issue_comment'
@@ -261,6 +277,15 @@ jobs:
           path: test/*.log
           retention-days: 7
 
+      - name: Set PR commit status (result)
+        if: always() && steps.pr-sha.outputs.sha
+        uses: myrotvorets/set-commit-status-action@v2.0.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ steps.pr-sha.outputs.sha }}
+          status: ${{ job.status }}
+          context: Integration Tests
+
   #############################################################################
   # Stage 4: Fallback Cleanup (cloud-nuke safety net)
   #############################################################################
@@ -271,6 +296,25 @@ jobs:
     needs: [integration-test]
     if: always() && needs.integration-test.result != 'skipped'
     steps:
+      - name: Resolve PR head SHA
+        id: pr-sha
+        if: github.event_name == 'issue_comment'
+        run: |
+          SHA=$(gh pr view ${{ github.event.issue.number }} --repo ${{ github.repository }} --json headRefOid -q .headRefOid)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set PR commit status (pending)
+        if: steps.pr-sha.outputs.sha
+        uses: myrotvorets/set-commit-status-action@v2.0.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ steps.pr-sha.outputs.sha }}
+          status: pending
+          context: Cleanup (cloud-nuke)
+          description: Cleanup running...
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -288,11 +332,20 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run cleanup
-        run: task cleanup-run -- force
+        run: task cleanup-run
         env:
           PIPELINE_RUN_ID: "${{ github.run_id }}"
           CLOUD_NUKE_VERSION: v0.46.0
           DISABLE_TELEMETRY: "true"
+
+      - name: Set PR commit status (result)
+        if: always() && steps.pr-sha.outputs.sha
+        uses: myrotvorets/set-commit-status-action@v2.0.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ steps.pr-sha.outputs.sha }}
+          status: ${{ job.status }}
+          context: Cleanup (cloud-nuke)
 
   #############################################################################
   # Summary job
@@ -313,33 +366,68 @@ jobs:
     steps:
       - name: Check all jobs
         run: |
-          echo "Static Analysis Results:"
-          echo "  - terraform-fmt: ${{ needs.terraform-fmt.result }}"
-          echo "  - terraform-validate: ${{ needs.terraform-validate.result }}"
-          echo "  - tflint: ${{ needs.tflint.result }}"
-          echo "  - trivy: ${{ needs.trivy.result }}"
-          echo ""
-          echo "Test Results:"
-          echo "  - tests-unit: ${{ needs.tests-unit.result }}"
-          echo "  - integration-test: ${{ needs.integration-test.result }}"
-          echo ""
-          echo "Cleanup Results:"
-          echo "  - cleanup-fallback: ${{ needs.cleanup-fallback.result }}"
+          # Map results to emojis
+          status_icon() {
+            case "$1" in
+              success)   echo "✅" ;;
+              failure)   echo "❌" ;;
+              skipped)   echo "⏭️" ;;
+              cancelled) echo "🚫" ;;
+              *)         echo "❓" ;;
+            esac
+          }
+
+          FMT="${{ needs.terraform-fmt.result }}"
+          VALIDATE="${{ needs.terraform-validate.result }}"
+          TFLINT="${{ needs.tflint.result }}"
+          TRIVY="${{ needs.trivy.result }}"
+          UNIT="${{ needs.tests-unit.result }}"
+          INTEGRATION="${{ needs.integration-test.result }}"
+          CLEANUP="${{ needs.cleanup-fallback.result }}"
+
+          # Add trigger context note
+          EVENT="${{ github.event_name }}"
+          {
+            echo "## Pipeline Results"
+            echo ""
+            if [[ "$EVENT" == "issue_comment" ]]; then
+              echo "> Triggered by \`/test-integration\` comment — static analysis and unit tests skipped"
+              echo ""
+            elif [[ "$EVENT" == "push" ]]; then
+              echo "> Triggered by push to \`${{ github.ref_name }}\`"
+              echo ""
+            else
+              echo "> Triggered by pull request"
+              echo ""
+            fi
+            echo "| Stage | Job | Result |"
+            echo "|-------|-----|--------|"
+            echo "| Static Analysis | Terraform Format | $(status_icon $FMT) $FMT |"
+            echo "| Static Analysis | Terraform Validate | $(status_icon $VALIDATE) $VALIDATE |"
+            echo "| Static Analysis | TFLint | $(status_icon $TFLINT) $TFLINT |"
+            echo "| Static Analysis | Trivy Security Scan | $(status_icon $TRIVY) $TRIVY |"
+            echo "| Tests | Unit Tests | $(status_icon $UNIT) $UNIT |"
+            echo "| Tests | Integration Tests | $(status_icon $INTEGRATION) $INTEGRATION |"
+            echo "| Cleanup | cloud-nuke | $(status_icon $CLEANUP) $CLEANUP |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           # Fail if any required static analysis or unit test job failed (skipped is OK for comment triggers)
-          if [[ "${{ needs.terraform-fmt.result }}" == "failure" ]] || \
-             [[ "${{ needs.terraform-validate.result }}" == "failure" ]] || \
-             [[ "${{ needs.tflint.result }}" == "failure" ]] || \
-             [[ "${{ needs.trivy.result }}" == "failure" ]] || \
-             [[ "${{ needs.tests-unit.result }}" == "failure" ]]; then
-            echo "One or more required jobs failed"
+          if [[ "$FMT" == "failure" ]] || \
+             [[ "$VALIDATE" == "failure" ]] || \
+             [[ "$TFLINT" == "failure" ]] || \
+             [[ "$TRIVY" == "failure" ]] || \
+             [[ "$UNIT" == "failure" ]]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> **❌ One or more required jobs failed**" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
           # Fail if integration tests failed
-          if [[ "${{ needs.integration-test.result }}" == "failure" ]]; then
-            echo "Integration tests failed"
+          if [[ "$INTEGRATION" == "failure" ]]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> **❌ Integration tests failed**" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-          echo "All required checks passed!"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> **✅ All required checks passed**" >> "$GITHUB_STEP_SUMMARY"

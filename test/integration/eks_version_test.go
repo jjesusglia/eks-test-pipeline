@@ -26,7 +26,7 @@ func TestEksClusterVersionMatrix(t *testing.T) {
 
 	vpcName := fmt.Sprintf("%s-%s", versionTestVPCName, cfg.UniqueID)
 
-	t.Logf("VPC: %s | Region: %s | MinVersion: %s", vpcName, cfg.AWSRegion, cfg.MinVersion)
+	t.Logf("VPC: %s | Region: %s | Profile: %s | MinVersion: %s", vpcName, cfg.AWSRegion, cfg.AWSProfile, cfg.MinVersion)
 	t.Logf("Pipeline tags: %v", cfg.PipelineTags)
 
 	// ── Step 1: Deploy shared VPC ──────────────────────────────────────────
@@ -43,7 +43,7 @@ func TestEksClusterVersionMatrix(t *testing.T) {
 		Parallelism: 20,
 	})
 
-	// VPC destroy runs AFTER all parallel subtests complete (Go testing guarantee)
+	// VPC destroy runs after the "versions" barrier subtest completes (all EKS subtests done)
 	defer terraform.Destroy(t, vpcOpts)
 	terraform.InitAndApply(t, vpcOpts)
 
@@ -57,49 +57,54 @@ func TestEksClusterVersionMatrix(t *testing.T) {
 	t.Logf("Discovered EKS versions: %v", versions)
 
 	// ── Step 3: Parallel subtests per version ──────────────────────────────
-	for _, v := range versions {
-		version := v // capture loop variable
-		t.Run("EKS_"+strings.ReplaceAll(version, ".", "_"), func(t *testing.T) {
-			t.Parallel()
+	// Barrier subtest: t.Run blocks until all parallel children complete.
+	// Without this, the parent function returns, defers fire (destroying the
+	// VPC), while parallel subtests are still deploying EKS clusters.
+	t.Run("versions", func(t *testing.T) {
+		for _, v := range versions {
+			version := v // capture loop variable
+			t.Run("EKS_"+strings.ReplaceAll(version, ".", "_"), func(t *testing.T) {
+				t.Parallel()
 
-			versionSlug := strings.ReplaceAll(version, ".", "-")
-			clusterName := fmt.Sprintf("test-eks-%s-%s", versionSlug, cfg.UniqueID)
+				versionSlug := strings.ReplaceAll(version, ".", "-")
+				clusterName := fmt.Sprintf("test-eks-%s-%s", versionSlug, cfg.UniqueID)
 
-			t.Logf("Testing EKS %s → cluster: %s", version, clusterName)
+				t.Logf("Testing EKS %s → cluster: %s", version, clusterName)
 
-			// Each version gets its own temp dir (avoids state lock conflicts)
-			eksDir := copyFixtureToTemp(t, "examples/eks")
-			eksOpts := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
-				TerraformDir: eksDir,
-				Vars: map[string]interface{}{
-					"cluster_name":        clusterName,
-					"cluster_version":     version,
-					"aws_region":          cfg.AWSRegion,
-					"vpc_id":              vpcID,
-					"private_subnet_ids":  privateSubnets,
-					"environment":         "terratest",
-					"node_instance_types": []string{"t3.small"},
-					"node_desired_size":   1,
-					"node_min_size":       1,
-					"node_max_size":       1,
-					"pipeline_tags":       cfg.PipelineTags,
-					"pipeline_run_hash":   "",
-				},
-				NoColor:     true,
-				Parallelism: 20,
+				// Each version gets its own temp dir (avoids state lock conflicts)
+				eksDir := copyFixtureToTemp(t, "examples/eks")
+				eksOpts := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
+					TerraformDir: eksDir,
+					Vars: map[string]interface{}{
+						"cluster_name":        clusterName,
+						"cluster_version":     version,
+						"aws_region":          cfg.AWSRegion,
+						"vpc_id":              vpcID,
+						"private_subnet_ids":  privateSubnets,
+						"environment":         "terratest",
+						"node_instance_types": []string{"t3.small"},
+						"node_desired_size":   1,
+						"node_min_size":       1,
+						"node_max_size":       1,
+						"pipeline_tags":       cfg.PipelineTags,
+						"pipeline_run_hash":   "",
+					},
+					NoColor:     true,
+					Parallelism: 20,
+				})
+
+				defer terraform.Destroy(t, eksOpts)
+				terraform.InitAndApply(t, eksOpts)
+
+				out := getEKSOutputs(t, eksOpts)
+				out.validate(t, clusterName, version)
+
+				validateClusterEndpoint(t, out.ClusterEndpoint)
+				validateClusterStatus(t, cfg.AWSRegion, out.ClusterName, version)
+
+				clientset := getKubernetesClient(t, cfg.AWSRegion, out.ClusterName, out.ClusterEndpoint, out.ClusterCAData)
+				validateNodeReadiness(t, clientset)
 			})
-
-			defer terraform.Destroy(t, eksOpts)
-			terraform.InitAndApply(t, eksOpts)
-
-			out := getEKSOutputs(t, eksOpts)
-			out.validate(t, clusterName, version)
-
-			validateClusterEndpoint(t, out.ClusterEndpoint)
-			validateClusterStatus(t, cfg.AWSRegion, out.ClusterName, version)
-
-			clientset := getKubernetesClient(t, cfg.AWSRegion, out.ClusterName, out.ClusterEndpoint, out.ClusterCAData)
-			validateNodeReadiness(t, clientset)
-		})
-	}
+		}
+	})
 }

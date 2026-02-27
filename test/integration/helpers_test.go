@@ -377,6 +377,7 @@ func getPipelineTags(projectName string) map[string]string {
 // testConfig centralizes environment variable lookups and shared test setup.
 type testConfig struct {
 	AWSRegion    string
+	AWSProfile   string
 	ProjectName  string
 	MinVersion   string
 	PipelineTags map[string]string
@@ -384,14 +385,28 @@ type testConfig struct {
 }
 
 // newTestConfig creates a testConfig, skipping in short mode.
+// Defaults AWS_PROFILE to "sandbox" for local development.
+// CI uses OIDC credentials so no profile is needed there.
 func newTestConfig(t *testing.T) *testConfig {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+
+	// Default to "sandbox" profile for local runs.
+	// In CI (GITHUB_RUN_ID set), OIDC handles auth — no profile needed.
+	awsProfile := os.Getenv("AWS_PROFILE")
+	if awsProfile == "" && os.Getenv("GITHUB_RUN_ID") == "" {
+		awsProfile = "sandbox"
+	}
+	if awsProfile != "" {
+		t.Setenv("AWS_PROFILE", awsProfile)
+	}
+
 	projectName := getEnvWithDefault("PROJECT_NAME", "eks-cluster")
 	return &testConfig{
 		AWSRegion:    getEnvWithDefault("AWS_REGION", "us-west-1"),
+		AWSProfile:   awsProfile,
 		ProjectName:  projectName,
 		MinVersion:   getEnvWithDefault("MIN_EKS_VERSION", "1.31"),
 		PipelineTags: getPipelineTags(projectName),

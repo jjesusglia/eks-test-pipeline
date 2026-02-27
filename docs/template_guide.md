@@ -232,6 +232,82 @@ scripts/clean.sh                 # Deep clean utility
 .cloud-nuke-config.template.yml # Cleanup safety net
 ```
 
+## CI IAM Role Setup
+
+The CI pipeline authenticates to AWS via OIDC — no static credentials. You need an IAM role with a GitHub OIDC trust policy.
+
+### 1. Prerequisites
+
+Your AWS account needs a GitHub OIDC identity provider. Create one if it doesn't exist:
+
+```bash
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com \
+  --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
+```
+
+### 2. Create the IAM role
+
+```bash
+aws iam create-role \
+  --role-name <your-project>-test-pipeline \
+  --assume-role-policy-document file://trust-policy.json
+```
+
+**Trust policy** (`trust-policy.json`):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": "repo:YOUR_ORG/YOUR_REPO:*"
+        }
+      }
+    }
+  ]
+}
+```
+
+The `sub` condition controls which branches/events can assume the role. `repo:org/repo:*` allows all branches. Restrict to `repo:org/repo:ref:refs/heads/master` for production.
+
+### 3. Attach permissions
+
+The role needs permissions for all resources your Terraform module creates and destroys. Here's what the EKS reference project uses:
+
+| Permission Group | Actions | Purpose |
+|-----------------|---------|---------|
+| EKS | `eks:*` | Create/delete/describe clusters and node groups |
+| EC2/VPC | `ec2:*Vpc*`, `ec2:*Subnet*`, `ec2:*SecurityGroup*`, `ec2:*InternetGateway*`, `ec2:*NatGateway*`, `ec2:*RouteTable*`, `ec2:*LaunchTemplate*`, `ec2:RunInstances`, `ec2:TerminateInstances` | VPC networking and compute |
+| IAM | `iam:CreateRole`, `iam:DeleteRole`, `iam:AttachRolePolicy`, `iam:DetachRolePolicy`, `iam:PassRole`, `iam:*OpenIDConnectProvider*`, `iam:*Policy*`, `iam:TagRole` | EKS service roles, IRSA, node group roles |
+| CloudWatch | `logs:CreateLogGroup`, `logs:DeleteLogGroup`, `logs:DescribeLogGroups`, `logs:PutRetentionPolicy`, `logs:*Tag*` | EKS control plane logging |
+| KMS | `kms:CreateKey`, `kms:DescribeKey`, `kms:ScheduleKeyDeletion`, `kms:*Alias*`, `kms:TagResource` | Secrets encryption |
+| AutoScaling | `autoscaling:*` | Managed node groups |
+| SSM | `ssm:GetParameter` | AMI lookups |
+| STS | `sts:GetCallerIdentity` | Caller identity verification |
+
+For simpler modules (S3, Lambda), you'll need fewer permissions — scope to what your module actually provisions.
+
+### 4. Set the role ARN in the workflow
+
+Update `AWS_ROLE_ARN` in `.github/workflows/test.yml`:
+
+```yaml
+env:
+  AWS_ROLE_ARN: "arn:aws:iam::ACCOUNT_ID:role/<your-project>-test-pipeline"
+```
+
 ## Checklist for New Projects
 
 1. [ ] Copy the repo
@@ -239,7 +315,8 @@ scripts/clean.sh                 # Deep clean utility
 3. [ ] Add your module under `modules/`
 4. [ ] Create test fixture(s) under `examples/` with `pipeline_tags` variable
 5. [ ] Set `PROJECT_NAME`, `VALIDATE_PATHS`, `INTEGRATION_TEST_TIMEOUT` in Taskfile
-6. [ ] Set `AWS_ROLE_ARN`, `AWS_REGION` in workflow
-7. [ ] Write Go tests following one of the patterns above
-8. [ ] `task setup && task test`
-9. [ ] `task test-integration` to verify the full pipeline
+6. [ ] Create IAM role with OIDC trust policy (see [CI IAM Role Setup](#ci-iam-role-setup))
+7. [ ] Set `AWS_ROLE_ARN`, `AWS_REGION` in workflow
+8. [ ] Write Go tests following one of the patterns above
+9. [ ] `task setup && task test`
+10. [ ] `task test-integration` to verify the full pipeline

@@ -7,6 +7,8 @@ on:
   pull_request:
     branches:
       - master
+  issue_comment:
+    types: [created]
 
 # Prevent concurrent runs on the same branch
 concurrency:
@@ -28,6 +30,7 @@ permissions:
   id-token: write
   contents: read
   pull-requests: write
+  issues: write
 
 jobs:
   #############################################################################
@@ -35,6 +38,7 @@ jobs:
   #############################################################################
   terraform-fmt:
     name: Terraform Format
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -56,6 +60,7 @@ jobs:
 
   terraform-validate:
     name: Terraform Validate
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -77,6 +82,7 @@ jobs:
 
   tflint:
     name: TFLint
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -106,6 +112,7 @@ jobs:
 
   trivy:
     name: Trivy Security Scan
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -146,6 +153,7 @@ jobs:
 
   tests-unit:
     name: Unit Tests
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     needs: [terraform-fmt, terraform-validate, tflint, trivy]
     steps:
@@ -183,12 +191,34 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: [tests-unit]
-    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
+    if: |
+      always()
+      && (needs.tests-unit.result == 'success' || needs.tests-unit.result == 'skipped')
+      && (
+        github.ref == 'refs/heads/master'
+        || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
+        || (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/test-integration'))
+      )
     timeout-minutes: 60
     env:
       PIPELINE_RUN_ID: "${{ github.run_id }}"
     steps:
+      - name: React to comment
+        if: github.event_name == 'issue_comment'
+        run: |
+          gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content=rocket
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout PR branch
+        if: github.event_name == 'issue_comment'
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/merge
+
       - name: Checkout
+        if: github.event_name != 'issue_comment'
         uses: actions/checkout@v4
 
       - name: Setup Terraform
@@ -296,7 +326,7 @@ jobs:
           echo "Cleanup Results:"
           echo "  - cleanup-fallback: ${{ needs.cleanup-fallback.result }}"
 
-          # Fail if any required static analysis or unit test job failed
+          # Fail if any required static analysis or unit test job failed (skipped is OK for comment triggers)
           if [[ "${{ needs.terraform-fmt.result }}" == "failure" ]] || \
              [[ "${{ needs.terraform-validate.result }}" == "failure" ]] || \
              [[ "${{ needs.tflint.result }}" == "failure" ]] || \

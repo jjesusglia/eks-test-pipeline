@@ -168,6 +168,10 @@ The GitHub Actions workflow (`.github/workflows/test.yml`) runs the same `task` 
 Static analysis (parallel) → Unit tests → Integration tests → Cleanup fallback
 ```
 
+Integration tests run on master pushes and can be triggered on PRs by either:
+- Adding the `run-integration-tests` label
+- Commenting `/test-integration` on the PR (skips static analysis and unit tests since they already passed on push)
+
 Integration tests handle the full lifecycle internally: deploy VPC, discover EKS versions, deploy parallel EKS clusters, validate, and destroy everything via `defer`.
 
 ## Project Structure

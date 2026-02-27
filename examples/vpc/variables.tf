@@ -23,13 +23,13 @@ variable "environment" {
 }
 
 variable "pipeline_tags" {
-  description = "Tags automatically injected by scripts/terraform.sh for resource identification and cleanup"
+  description = "Tags for resource identification and cleanup (injected by Go test helpers)"
   type        = map(string)
   default     = {}
 }
 
 variable "pipeline_run_hash" {
-  description = "Short unique hash from RunID, injected by scripts/terraform.sh for unique resource naming"
+  description = "Short unique hash from RunID for unique resource naming"
   type        = string
   default     = ""
 }

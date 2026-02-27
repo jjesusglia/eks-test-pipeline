@@ -32,15 +32,15 @@ Automated test pipeline for a Terraform EKS module using Terratest (Go) and GitH
 ### Working In This Directory
 - Run `task setup` after cloning to initialize Terraform and Go dependencies
 - Use `task --list` to see all available commands
-- AWS profile `sandbox` and region `us-west-1` are defaults in Taskfile.yml
-- All Terraform resources are tagged with `Pipeline`, `RunID`, and `Environment` for cleanup traceability (auto-injected by `scripts/terraform.sh`)
+- Region `us-west-1` is the default in Taskfile.yml
+- All Terraform resources are tagged with `Pipeline`, `RunID`, and `Environment` for cleanup traceability (injected by `getPipelineTags` in Go test helpers)
 - Minimum supported EKS version is 1.31 (enforced in module validation)
 
 ### Testing Requirements
 - Unit tests: `task test-unit` (no AWS, ~3s, 48 tests)
 - Static analysis: `task lint` (fmt + validate + tflint + trivy)
 - Integration tests: `task test-integration` (real AWS, ~25min, ~$0.20)
-- Parallel version tests: `task test-all-versions` (deploys shared VPC, tests multiple EKS versions)
+- Parallel version tests: `task test-integration` (deploys shared VPC, tests multiple EKS versions)
 - CI pipeline: `task ci` (runs all non-AWS checks locally)
 
 ### Common Patterns

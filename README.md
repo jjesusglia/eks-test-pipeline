@@ -30,12 +30,12 @@ Delete `modules/eks-cluster/` and add your own Terraform module under `modules/`
 
 ### 3. Create test fixtures
 
-Create directories under `examples/` for your test infrastructure. Each fixture needs a `pipeline_tags` variable for automatic tagging:
+Create directories under `examples/` for your test infrastructure. Each fixture needs a `pipeline_tags` variable for resource tagging:
 
 ```hcl
 # examples/<your-fixture>/variables.tf
 variable "pipeline_tags" {
-  description = "Tags injected by scripts/terraform.sh for resource identification and cleanup"
+  description = "Tags for resource identification and cleanup"
   type        = map(string)
   default     = {}
 }
@@ -47,43 +47,27 @@ module "my_module" {
 }
 ```
 
-### 4. Configure layers
+### 4. Update variables
 
-Set `LAYERS` in `Taskfile.yml` to define your deploy order:
-
-```yaml
-vars:
-  PROJECT_NAME: my-module        # Used in Pipeline tag
-  LAYERS: ""                     # No infra deps (tests manage their own terraform)
-  # LAYERS: "vpc"                # Module needs VPC deployed first
-  # LAYERS: "vpc eks"            # Multi-layer: VPC then EKS
-```
-
-### 5. Update variables
-
-Edit ~10 vars in `Taskfile.yml`:
+Edit vars in `Taskfile.yml`:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `PROJECT_NAME` | Identifies resources in AWS tags | `s3-bucket` |
 | `AWS_REGION` | AWS region for deployments | `us-east-1` |
-| `AWS_PROFILE` | AWS CLI profile for local runs | `sandbox` |
-| `LAYERS` | Deploy order (space-separated) | `""` or `"vpc"` |
 | `VALIDATE_PATHS` | Terraform dirs to validate | `"modules/s3 examples/basic"` |
-| `INTEGRATION_TEST_PATTERN` | Go test function match | `TestS3Bucket` |
 | `INTEGRATION_TEST_TIMEOUT` | Test timeout | `10m` |
 
-Edit ~3 vars in `.github/workflows/test.yml`:
+Edit vars in `.github/workflows/test.yml`:
 
 | Variable | Description |
 |----------|-------------|
-| `ENABLE_VERSION_TESTING` | `"false"` for simple projects |
 | `AWS_ROLE_ARN` | IAM role for OIDC auth |
 | `AWS_REGION` | AWS region |
 
-### 6. Write tests
+### 5. Write tests
 
-Follow `test/integration/eks_cluster_test.go` as a pattern:
+Follow `test/integration/eks_version_test.go` as a pattern:
 
 ```go
 func TestMyModule(t *testing.T) {
@@ -96,49 +80,43 @@ func TestMyModule(t *testing.T) {
 }
 ```
 
-### 7. Run
+### 6. Run
 
 ```bash
 task setup    # Initialize terraform + go deps
 task test     # Lint + unit tests (no AWS)
 ```
 
-## Layer System
+## Test Infrastructure Lifecycle
 
-Layers are infrastructure dependencies deployed in order before tests run.
+Go tests manage the full infrastructure lifecycle — no external scripts or CI steps needed.
 
-| `LAYERS` value | Behavior |
-|----------------|----------|
-| `""` | No layers. Tests manage their own terraform. |
-| `"account-setup"` | Single layer. Deploy → test → destroy. |
-| `"vpc eks"` | Multi-layer. Deploy vpc, then eks. Destroy in reverse. |
+The pattern used by `eks_version_test.go`:
 
-### Commands
+1. Deploy shared VPC via `terraform.InitAndApply`
+2. Pass VPC outputs (`vpc_id`, `private_subnets`) to parallel EKS subtests
+3. Each EKS subtest gets its own temp directory (avoids state lock conflicts)
+4. `defer terraform.Destroy` ensures cleanup in correct order (EKS first, then VPC)
 
-```bash
-task deploy -- vpc        # Deploy a single layer
-task deploy               # Deploy all layers (left to right)
-task destroy -- vpc       # Destroy a single layer
-task destroy              # Destroy all layers (right to left)
-task plan -- vpc          # Plan a single layer
-task plan                 # Plan all layers
 ```
-
-### Output passing
-
-When a layer is deployed, its terraform outputs are saved to `.task/<layer>.outputs.json`. The next layer automatically loads them as `TF_VAR_*` environment variables via `scripts/load_layer_outputs.sh`.
+TestEksClusterVersionMatrix
+  ├── Deploy VPC (once)
+  ├── Discover EKS versions from AWS
+  ├── t.Run("group", ...)
+  │   ├── EKS 1.31 (parallel) → deploy, validate, defer destroy
+  │   └── EKS 1.32 (parallel) → deploy, validate, defer destroy
+  └── Destroy VPC (after all subtests complete)
+```
 
 ## Pipeline Tags
 
-Every resource deployed by this template is automatically tagged:
+Every resource is automatically tagged by Go test helpers (`getPipelineTags` in `helpers_test.go`):
 
 | Tag | Value | Purpose |
 |-----|-------|---------|
-| `Pipeline` | `PROJECT_NAME` from Taskfile | Identifies which project created it |
+| `Pipeline` | `PROJECT_NAME` from env | Identifies which project created it |
 | `RunID` | GitHub run ID or `local-YYYYMMDD-HHMMSS` | Identifies the specific run |
 | `Environment` | `ci` or `local` | Distinguishes CI from developer runs |
-
-Tags are injected by `scripts/terraform.sh` via `TF_VAR_pipeline_tags`. No manual tagging needed.
 
 ### Cleanup
 
@@ -168,7 +146,6 @@ task cleanup-project      # Delete ALL resources for this project (dry-run only)
 | `task test` | Fmt + validate-tf + lint + unit tests | No |
 | `task test-integration` | Deploy → test → destroy | Yes |
 | `task test-all` | Lint + unit + integration | Yes |
-| `task test-all-versions` | Parallel version testing | Yes |
 
 ### Utilities
 
@@ -184,21 +161,13 @@ task cleanup-project      # Delete ALL resources for this project (dry-run only)
 
 The GitHub Actions workflow (`.github/workflows/test.yml`) runs the same `task` commands as local development.
 
-### Simple pipeline (default)
+### Pipeline stages
 
 ```
-task fmt → task validate-tf → task tflint → task security-scan → task test-unit → task test-integration
+Static analysis (parallel) → Unit tests → Integration tests → Cleanup fallback
 ```
 
-### Version testing pipeline (opt-in)
-
-Set `ENABLE_VERSION_TESTING: "true"` in the workflow to enable parallel matrix testing:
-
-```
-Static analysis → Unit tests → Discover versions → Deploy VPC
-  → [per version] Deploy EKS → Go test → Destroy EKS
-  → Destroy VPC → Cleanup fallback
-```
+Integration tests handle the full lifecycle internally: deploy VPC, discover EKS versions, deploy parallel EKS clusters, validate, and destroy everything via `defer`.
 
 ## Project Structure
 
@@ -216,8 +185,7 @@ Static analysis → Unit tests → Discover versions → Deploy VPC
 │       ├── validation.go          # Validation functions
 │       └── validation_test.go     # Unit tests
 ├── scripts/
-│   ├── terraform.sh               # Dynamic terraform executor + auto-tagging
-│   └── load_layer_outputs.sh      # Layer output → TF_VAR translation
+│   └── clean.sh                   # Deep clean utility (state + cache)
 ├── Taskfile.yml                   # Task runner configuration
 ├── .github/workflows/test.yml    # CI/CD pipeline
 ├── .cloud-nuke-config.template.yml  # Cleanup config template

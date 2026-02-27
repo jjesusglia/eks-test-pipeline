@@ -352,7 +352,6 @@ func rewriteModuleSources(content, fixtureDir string) string {
 }
 
 // getPipelineTags generates pipeline tags for resource identification and cleanup.
-// These match the tags that scripts/terraform.sh would inject.
 func getPipelineTags(projectName string) map[string]string {
 	runID := os.Getenv("PIPELINE_RUN_ID")
 

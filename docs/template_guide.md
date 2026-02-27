@@ -1,18 +1,19 @@
 # Template Guide: Using This Pipeline for Simpler Projects
 
-This guide shows how to adapt this template for projects that are simpler than EKS — no version matrix, fewer layers, or no layers at all.
+This guide shows how to adapt this template for projects simpler than EKS.
 
 ## Quick Reference
 
-| Project type | LAYERS | Tests deploy infra? | Example |
-|-------------|--------|:---:|---------|
-| Self-contained | `""` | Yes (in Go test) | S3 bucket, IAM role |
-| Single layer | `"my-module"` | No (layers handle it) | RDS, Lambda |
-| Multi-layer | `"vpc rds"` | No (layers handle it) | EKS, ECS |
+| Project type | Shared infra? | Example |
+|-------------|:---:|---------|
+| Self-contained | No | S3 bucket, IAM role, Lambda |
+| Needs VPC | Yes (deploy in parent test) | RDS, ECS, EKS |
+
+All infrastructure is managed by Go tests — no external deploy scripts needed.
 
 ---
 
-## Example 1: S3 Bucket Module (no layers)
+## Example 1: S3 Bucket Module (self-contained)
 
 The simplest case. Your Go test manages its own terraform.
 
@@ -37,10 +38,7 @@ test/
 vars:
   PROJECT_NAME: s3-bucket
   AWS_REGION: us-east-1
-  AWS_PROFILE: sandbox
-  LAYERS: ""                              # No layers needed
   VALIDATE_PATHS: "modules/s3-bucket examples/basic"
-  INTEGRATION_TEST_PATTERN: TestS3Bucket
   INTEGRATION_TEST_TIMEOUT: 10m
 ```
 
@@ -53,11 +51,6 @@ variable "pipeline_tags" {
   default = {}
 }
 
-variable "pipeline_run_hash" {
-  type    = string
-  default = ""
-}
-
 variable "bucket_name" {
   type    = string
   default = "terratest-s3"
@@ -66,7 +59,7 @@ variable "bucket_name" {
 # examples/basic/main.tf
 module "s3" {
   source      = "../../modules/s3-bucket"
-  bucket_name = var.pipeline_run_hash != "" ? "${var.bucket_name}-${var.pipeline_run_hash}" : var.bucket_name
+  bucket_name = var.bucket_name
   tags        = merge(var.pipeline_tags, { Environment = "test" })
 }
 ```
@@ -75,58 +68,47 @@ module "s3" {
 
 ```go
 func TestS3Bucket(t *testing.T) {
+    cfg := newTestConfig(t)
+
     terraformOptions := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
-        TerraformDir: filepath.Join("..", "..", "examples", "basic"),
+        TerraformDir: copyFixtureToTemp(t, "examples/basic"),
+        Vars: map[string]interface{}{
+            "bucket_name":   fmt.Sprintf("test-s3-%s", cfg.UniqueID),
+            "pipeline_tags": cfg.PipelineTags,
+        },
     })
     defer terraform.Destroy(t, terraformOptions)
     terraform.InitAndApply(t, terraformOptions)
 
     bucketID := terraform.Output(t, terraformOptions, "bucket_id")
     assert.NotEmpty(t, bucketID)
-    // ... more validations
 }
 ```
 
 ### 5. Workflow
 
 ```bash
-task test          # lint + unit (no AWS)
-task test-run      # deploy is a no-op, runs TestS3Bucket which deploys its own infra
-```
-
-Since `LAYERS: ""`, `deploy` and `destroy` skip automatically. The Go test handles everything.
-
-### 6. CI changes
-
-```yaml
-env:
-  ENABLE_VERSION_TESTING: "false"
-  AWS_ROLE_ARN: "arn:aws:iam::ACCOUNT:role/s3-test-pipeline"
-  AWS_REGION: "us-east-1"
+task test              # lint + unit (no AWS)
+task test-integration  # deploy → validate → destroy
 ```
 
 ---
 
-## Example 2: RDS Module (single layer — needs VPC)
+## Example 2: RDS Module (needs shared VPC)
 
-Your module needs a VPC deployed first, but there's only one version to test.
+Your module needs a VPC. Deploy it in the parent test, share across subtests.
 
 ### 1. Project structure
 
 ```
 modules/rds-postgres/       # Your module
 examples/
-  vpc/                      # Layer 1: shared VPC
-    main.tf
-    variables.tf
-    outputs.tf
-  rds/                      # Layer 2: RDS in the VPC
-    main.tf
-    variables.tf
-    outputs.tf
+  vpc/                      # VPC fixture (deployed once by Go test)
+  rds/                      # RDS fixture (uses VPC outputs)
 test/
   integration/
-    rds_test.go             # Validates RDS against deployed layers
+    rds_test.go             # Deploys VPC, then RDS subtests
+    helpers_test.go         # Shared helpers
 ```
 
 ### 2. Taskfile changes
@@ -135,70 +117,68 @@ test/
 vars:
   PROJECT_NAME: rds-postgres
   AWS_REGION: eu-west-1
-  AWS_PROFILE: sandbox
-  LAYERS: "vpc rds"
   VALIDATE_PATHS: "modules/rds-postgres examples/vpc examples/rds"
-  INTEGRATION_TEST_PATTERN: TestRdsPostgres
   INTEGRATION_TEST_TIMEOUT: 20m
 ```
 
-### 3. Go test (layer-based, like TestEksClusterVersioned)
+### 3. Go test (shared VPC pattern)
 
 ```go
 func TestRdsPostgres(t *testing.T) {
-    // Read outputs from deployed layers (loaded by task test-integration)
-    dbEndpoint := os.Getenv("TF_VAR_db_endpoint")
-    if dbEndpoint == "" {
-        t.Skip("TF_VAR_db_endpoint not set, deploy layers first")
-    }
+    cfg := newTestConfig(t)
 
-    // Validate the database
+    // Deploy shared VPC once
+    vpcDir := copyFixtureToTemp(t, "examples/vpc")
+    vpcOpts := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
+        TerraformDir: vpcDir,
+        Vars: map[string]interface{}{
+            "vpc_name":      fmt.Sprintf("test-vpc-%s", cfg.UniqueID),
+            "aws_region":    cfg.AWSRegion,
+            "pipeline_tags": cfg.PipelineTags,
+        },
+    })
+    defer terraform.Destroy(t, vpcOpts)
+    terraform.InitAndApply(t, vpcOpts)
+
+    vpcID := terraform.Output(t, vpcOpts, "vpc_id")
+    privateSubnets := terraform.OutputList(t, vpcOpts, "private_subnets")
+
+    // Deploy RDS using VPC outputs
+    rdsDir := copyFixtureToTemp(t, "examples/rds")
+    rdsOpts := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
+        TerraformDir: rdsDir,
+        Vars: map[string]interface{}{
+            "vpc_id":          vpcID,
+            "private_subnets": privateSubnets,
+            "pipeline_tags":   cfg.PipelineTags,
+        },
+    })
+    defer terraform.Destroy(t, rdsOpts)
+    terraform.InitAndApply(t, rdsOpts)
+
+    dbEndpoint := terraform.Output(t, rdsOpts, "db_endpoint")
     assert.Contains(t, dbEndpoint, "rds.amazonaws.com")
-    // ... connect and validate
 }
 ```
 
 ### 4. Workflow
 
 ```bash
-# Manual workflow (iterate fast)
-task deploy                    # Deploys vpc, then rds
-task test-integration          # Validates RDS — no deploy
-task test-integration          # Run again (fast!)
-task destroy                   # Cleanup
-
-# Automated pipeline
-task test-run                  # Deploy → test → destroy in one command
-```
-
-### 5. Output passing
-
-VPC outputs (like `vpc_id`, `private_subnets`) are automatically saved to `.task/vpc.outputs.json` and loaded as `TF_VAR_*` when deploying the `rds` layer.
-
-Your RDS fixture just declares matching variables:
-
-```hcl
-# examples/rds/variables.tf
-variable "vpc_id" { type = string }
-variable "private_subnets" { type = list(string) }
-variable "pipeline_tags" { type = map(string) default = {} }
-variable "pipeline_run_hash" { type = string default = "" }
+task test-integration  # Go test handles full lifecycle: VPC → RDS → validate → destroy
 ```
 
 ---
 
-## Example 3: Lambda Module (no VPC, no layers, fast tests)
+## Example 3: Lambda Module (no VPC, fast tests)
 
-Serverless modules are often the simplest.
+Serverless modules are the simplest.
 
 ### 1. Taskfile changes
 
 ```yaml
 vars:
   PROJECT_NAME: lambda-api
-  LAYERS: ""
   VALIDATE_PATHS: "modules/lambda-api examples/basic"
-  INTEGRATION_TEST_PATTERN: TestLambda
   INTEGRATION_TEST_TIMEOUT: 5m
 ```
 
@@ -206,8 +186,13 @@ vars:
 
 ```go
 func TestLambdaApi(t *testing.T) {
+    cfg := newTestConfig(t)
+
     terraformOptions := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
-        TerraformDir: filepath.Join("..", "..", "examples", "basic"),
+        TerraformDir: copyFixtureToTemp(t, "examples/basic"),
+        Vars: map[string]interface{}{
+            "pipeline_tags": cfg.PipelineTags,
+        },
     })
     defer terraform.Destroy(t, terraformOptions)
     terraform.InitAndApply(t, terraformOptions)
@@ -220,18 +205,17 @@ func TestLambdaApi(t *testing.T) {
 ### 3. That's it
 
 ```bash
-task test-run    # Deploys lambda, tests, destroys (~2 min)
+task test-integration  # Deploys lambda, tests, destroys (~2 min)
 ```
 
 ---
 
 ## What to Remove
 
-When copying this template for a simple project:
+When copying this template for a simpler project:
 
 | Remove if... | Files to delete |
 |-------------|----------------|
-| No version matrix testing | `scripts/test_versions.sh`, `discover-versions` task, `test-run-versions` task |
 | No VPC dependency | `examples/vpc/` |
 | No EKS | `examples/eks/`, `modules/eks-cluster/` |
 
@@ -240,11 +224,13 @@ When copying this template for a simple project:
 Always keep these — they're the generic framework:
 
 ```
-scripts/terraform.sh          # Dynamic executor + auto-tagging
-scripts/load_layer_outputs.sh # Layer output passing
-Taskfile.yml                  # All task commands
-.github/workflows/test.yml   # CI pipeline
-.cloud-nuke-config.template.yml  # Cleanup safety net
+Taskfile.yml                     # All task commands
+ci/test_integration.sh           # Go test runner
+ci/cleanup.sh                    # Cloud-nuke safety net
+ci/validate.sh                   # Terraform validation
+scripts/clean.sh                 # Deep clean utility
+.github/workflows/test.yml      # CI pipeline
+.cloud-nuke-config.template.yml # Cleanup safety net
 ```
 
 ## Checklist for New Projects
@@ -252,9 +238,9 @@ Taskfile.yml                  # All task commands
 1. [ ] Copy the repo
 2. [ ] Delete `modules/eks-cluster/`, `examples/eks/`, `examples/vpc/`
 3. [ ] Add your module under `modules/`
-4. [ ] Create test fixture(s) under `examples/` with `pipeline_tags` and `pipeline_run_hash` variables
-5. [ ] Set `PROJECT_NAME`, `LAYERS`, `VALIDATE_PATHS`, `INTEGRATION_TEST_PATTERN` in Taskfile
-6. [ ] Set `ENABLE_VERSION_TESTING: "false"`, `AWS_ROLE_ARN`, `AWS_REGION` in workflow
+4. [ ] Create test fixture(s) under `examples/` with `pipeline_tags` variable
+5. [ ] Set `PROJECT_NAME`, `VALIDATE_PATHS`, `INTEGRATION_TEST_TIMEOUT` in Taskfile
+6. [ ] Set `AWS_ROLE_ARN`, `AWS_REGION` in workflow
 7. [ ] Write Go tests following one of the patterns above
 8. [ ] `task setup && task test`
-9. [ ] `task test-run` to verify the full pipeline
+9. [ ] `task test-integration` to verify the full pipeline

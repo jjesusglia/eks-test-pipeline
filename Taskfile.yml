@@ -6,16 +6,6 @@ version: '3'
 vars:
   PROJECT_NAME: eks-cluster
   AWS_REGION: us-west-1
-  AWS_PROFILE: sandbox
-
-  # Layers: space-separated list of directories under examples/
-  # Deployed left-to-right, destroyed right-to-left
-  # Examples:
-  #   LAYERS: "vpc eks"          — EKS project (VPC first, then EKS)
-  #   LAYERS: "account-setup"    — Simple project (one layer)
-  #   LAYERS: ""                 — No infra deps (tests manage their own infra)
-  LAYERS: "vpc eks"
-
   # Paths for static analysis (terraform validate runs on each)
   VALIDATE_PATHS: "modules/eks-cluster examples/vpc examples/eks"
 
@@ -23,17 +13,13 @@ vars:
   TEST_DIR: test
   INTEGRATION_TEST_TIMEOUT: 55m
 
-  # EKS version testing (used by Go tests for version discovery)
-
   # Tool versions
   TFLINT_VERSION: v0.50.3
 
-# Export Taskfile vars as real environment variables for scripts
-# (Taskfile vars are templates, NOT env vars — scripts can't read them without this)
+# Export Taskfile vars as environment variables for CI scripts and Go tests
 env:
   PROJECT_NAME: "{{.PROJECT_NAME}}"
   AWS_REGION: "{{.AWS_REGION}}"
-  AWS_PROFILE: "{{.AWS_PROFILE}}"
   TF_VAR_aws_region: "{{.AWS_REGION}}"
 # =============================================================================
 
@@ -62,7 +48,7 @@ tasks:
     cmds:
       - |
         if [ -n "{{.CLI_ARGS}}" ]; then
-          PIPELINE_RUN_ID=validate ./scripts/terraform.sh init "{{.CLI_ARGS}}" -backend=false
+          terraform -chdir="{{.CLI_ARGS}}" init -input=false -backend=false
           terraform -chdir="{{.CLI_ARGS}}" validate
         else
           ./ci/validate.sh "{{.VALIDATE_PATHS}}"
@@ -113,40 +99,6 @@ tasks:
     desc: "Run unit tests with coverage report"
     cmds:
       - ./ci/test_unit.sh --coverage {{.TEST_DIR}}
-
-  ##############################################################################
-  # Layer Management (deploy/destroy infrastructure layers)
-  ##############################################################################
-
-  deploy:
-    desc: "Deploy infrastructure (use '-- <layer>' for a single layer, or no args for all)"
-    cmds:
-      - |
-        if [ -n "{{.CLI_ARGS}}" ]; then
-          ./scripts/terraform.sh apply examples/{{.CLI_ARGS}}
-        else
-          ./scripts/deploy_layers.sh apply "{{.LAYERS}}"
-        fi
-
-  destroy:
-    desc: "Destroy infrastructure (use '-- <layer>' for a single layer, or no args for all)"
-    cmds:
-      - |
-        if [ -n "{{.CLI_ARGS}}" ]; then
-          ./scripts/terraform.sh destroy examples/{{.CLI_ARGS}}
-        else
-          ./scripts/deploy_layers.sh destroy "{{.LAYERS}}"
-        fi
-
-  plan:
-    desc: "Plan infrastructure changes (use '-- <layer>' for a single layer, or no args for all)"
-    cmds:
-      - |
-        if [ -n "{{.CLI_ARGS}}" ]; then
-          ./scripts/terraform.sh plan examples/{{.CLI_ARGS}}
-        else
-          ./scripts/deploy_layers.sh plan "{{.LAYERS}}"
-        fi
 
   ##############################################################################
   # Integration Tests (Real AWS)

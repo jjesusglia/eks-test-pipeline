@@ -87,22 +87,19 @@ tasks:
       - task: security-scan
 
   ##############################################################################
-  # Unit Tests (Fast, No AWS)
+  # Tests
   ##############################################################################
 
-  test-unit:
-    desc: "Run unit tests (validation, helpers - no AWS)"
+  test:
+    desc: "Run local tests (lint + unit). Use '-- coverage' for coverage report"
     cmds:
-      - cd {{.TEST_DIR}} && go test -v ./unit/...
-
-  test-unit-coverage:
-    desc: "Run unit tests with coverage report"
-    cmds:
-      - ./ci/test_unit.sh --coverage {{.TEST_DIR}}
-
-  ##############################################################################
-  # Integration Tests (Real AWS)
-  ##############################################################################
+      - task: lint
+      - |
+        if [ "{{.CLI_ARGS}}" = "coverage" ]; then
+          ./ci/test_unit.sh --coverage {{.TEST_DIR}}
+        else
+          cd {{.TEST_DIR}} && go test -v ./unit/...
+        fi
 
   test-integration:
     desc: "Run integration tests (Go tests handle full infra lifecycle)"
@@ -113,25 +110,11 @@ tasks:
     cmds:
       - ./ci/test_integration.sh {{if .CLI_ARGS}}-run {{.CLI_ARGS}}{{end}} -timeout {{.INTEGRATION_TEST_TIMEOUT}} {{.TEST_DIR}}
 
-
-  ##############################################################################
-  # Combined Test Suites
-  ##############################################################################
-
-  test:
-    desc: "Run local tests (fmt + validate + lint + unit tests)"
-    cmds:
-      - task: fmt
-      - task: validate-tf
-      - task: lint
-      - task: test-unit
-
   test-all:
     desc: "Run everything: lint + unit + integration (deploys real AWS resources)"
     prompt: "This will deploy real AWS resources. Continue?"
     cmds:
-      - task: lint
-      - task: test-unit
+      - task: test
       - task: test-integration
 
   ##############################################################################
@@ -208,11 +191,7 @@ tasks:
   ci:
     desc: "Run CI pipeline locally (like GitHub Actions)"
     cmds:
-      - task: fmt
-      - task: validate-tf
-      - task: tflint
-      - task: security-scan
-      - task: test-unit
+      - task: test
 
   ##############################################################################
   # Debug Tasks

@@ -170,24 +170,6 @@ tasks:
     cmds:
       - ./ci/cleanup.sh project --region {{.AWS_REGION}} --project {{.PROJECT_NAME}} {{if eq .CLI_ARGS "force"}}--force{{end}}
 
-  ##############################################################################
-  # Development Workflows
-  ##############################################################################
-
-  watch:
-    desc: "Watch for changes and run lint on save"
-    cmds:
-      - echo "Watching Terraform files for changes..."
-      - |
-        while true; do
-          inotifywait -e modify -r modules/ examples/ || true
-          echo "---"
-          echo "Changes detected, running lint..."
-          task lint || true
-          echo "---"
-        done
-    platforms: [linux]
-
   ci:
     desc: "Run CI pipeline locally (like GitHub Actions)"
     cmds:

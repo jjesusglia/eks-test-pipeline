@@ -7,6 +7,8 @@ on:
   pull_request:
     branches:
       - master
+  issue_comment:
+    types: [created]
 
 # Prevent concurrent runs on the same branch
 concurrency:
@@ -14,16 +16,21 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # ===== CUSTOMIZE THESE FOR YOUR PROJECT =====
+  AWS_ROLE_ARN: "arn:aws:iam::078963965848:role/joaoj-eks-test-pipeline"
+  AWS_REGION: "us-west-1"
+  PROJECT_NAME: "eks-cluster"
+  # ===== END CUSTOMIZATION =====
   TERRAFORM_VERSION: "1.6.6"
   GO_VERSION: "1.21"
-  AWS_REGION: "us-west-1"
   TFLINT_VERSION: "v0.50.3"
-  AWS_ROLE_ARN: "arn:aws:iam::078963965848:role/joaoj-eks-test-pipeline"  # Replace with your OIDC role ARN
+  MIN_EKS_VERSION: "1.31"
 
 permissions:
-  id-token: write  # Required for OIDC
+  id-token: write
   contents: read
   pull-requests: write
+  issues: write
 
 jobs:
   #############################################################################
@@ -31,6 +38,7 @@ jobs:
   #############################################################################
   terraform-fmt:
     name: Terraform Format
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -41,18 +49,19 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Terraform Format Check
-        run: terraform fmt -check -recursive -diff
-        continue-on-error: false
+        run: task fmt
 
   terraform-validate:
     name: Terraform Validate
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        directory:
-          - modules/eks-cluster
-          - examples/complete
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,21 +71,33 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
-      - name: Terraform Init
-        run: terraform init -backend=false
-        working-directory: ${{ matrix.directory }}
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Terraform Validate
-        run: terraform validate
-        working-directory: ${{ matrix.directory }}
-        continue-on-error: false
+        run: task validate-tf
 
   tflint:
     name: TFLint
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@v4
@@ -86,12 +107,12 @@ jobs:
       - name: Initialize TFLint
         run: tflint --init
 
-      - name: Run TFLint (modules)
-        run: tflint --recursive --format=compact
-        continue-on-error: false
+      - name: Run TFLint
+        run: task tflint
 
   trivy:
     name: Trivy Security Scan
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -102,6 +123,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Trivy IaC scanner
         uses: aquasecurity/trivy-action@master
@@ -126,6 +153,7 @@ jobs:
 
   tests-unit:
     name: Unit Tests
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     needs: [terraform-fmt, terraform-validate, tflint, trivy]
     steps:
@@ -138,42 +166,73 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: test/go.sum
 
-      - name: Download dependencies
-        run: go mod download
-        working-directory: test
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run unit tests
-        run: go test -v -short -timeout 5m ./...
-        working-directory: test
+        run: task test-unit
 
   #############################################################################
-  # Stage 3: Integration Tests (AWS)
+  # Stage 3: Integration Tests
+  # Go tests handle the full lifecycle: VPC deploy, version discovery,
+  # parallel EKS deploys, validation, and all cleanup via defer.
   #############################################################################
 
-  integration-tests:
+  integration-test:
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: [tests-unit]
-    # Only run on master branch or when explicitly requested
-    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
-    timeout-minutes: 45
-
+    if: |
+      always()
+      && (needs.tests-unit.result == 'success' || needs.tests-unit.result == 'skipped')
+      && (
+        github.ref == 'refs/heads/master'
+        || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
+        || (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/test-integration'))
+      )
+    timeout-minutes: 60
+    env:
+      PIPELINE_RUN_ID: "${{ github.run_id }}"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: React to comment
+        if: github.event_name == 'issue_comment'
+        run: |
+          gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+            -f content=rocket
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Checkout PR branch
+        if: github.event_name == 'issue_comment'
+        uses: actions/checkout@v4
         with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          role-session-name: terratest-eks-${{ github.run_id }}
-          aws-region: ${{ env.AWS_REGION }}
+          ref: refs/pull/${{ github.event.issue.number }}/merge
+
+      - name: Checkout
+        if: github.event_name != 'issue_comment'
+        uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
-          terraform_wrapper: false  # Required for Terratest
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: terratest-integration-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -181,39 +240,36 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: test/go.sum
 
-      - name: Download dependencies
-        run: go mod download
-        working-directory: test
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run integration tests
-        run: |
-          go test -v -timeout 40m -run TestEksCluster ./...
-        working-directory: test
+        run: task test-integration
         env:
           AWS_REGION: ${{ env.AWS_REGION }}
-          TF_VAR_cluster_version: "1.29"
-          TF_VAR_github_run_id: "${{ github.run_id }}"
+          MIN_EKS_VERSION: ${{ env.MIN_EKS_VERSION }}
+          PROJECT_NAME: ${{ env.PROJECT_NAME }}
 
       - name: Upload test logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: test-logs-${{ github.run_id }}
-          path: |
-            test/*.log
-            examples/complete/*.tfplan
-            examples/complete/terraform.tfstate*
+          path: test/*.log
           retention-days: 7
 
   #############################################################################
-  # Cleanup job (runs even if integration tests fail)
+  # Stage 4: Fallback Cleanup (cloud-nuke safety net)
   #############################################################################
 
-  cleanup:
+  cleanup-fallback:
     name: Cleanup AWS Resources (cloud-nuke)
     runs-on: ubuntu-latest
-    needs: [integration-tests]
-    if: always() && needs.integration-tests.result != 'skipped'
+    needs: [integration-test]
+    if: always() && needs.integration-test.result != 'skipped'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -225,30 +281,17 @@ jobs:
           role-session-name: terratest-cleanup-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Install cloud-nuke
-        run: |
-          wget -q "https://github.com/gruntwork-io/cloud-nuke/releases/download/${CLOUD_NUKE_VERSION}/cloud-nuke_linux_amd64"
-          chmod +x cloud-nuke_linux_amd64
-          sudo mv cloud-nuke_linux_amd64 /usr/local/bin/cloud-nuke
-          cloud-nuke --version
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run cleanup
+        run: task cleanup-run -- force
         env:
+          PIPELINE_RUN_ID: "${{ github.run_id }}"
           CLOUD_NUKE_VERSION: v0.46.0
-
-      - name: Generate cloud-nuke config
-        run: |
-          sed "s/PLACEHOLDER_RUN_ID/${{ github.run_id }}/g" \
-            .cloud-nuke-config.template.yml > cloud-nuke-config.yml
-          cat cloud-nuke-config.yml
-
-      - name: Run cloud-nuke
-        run: |
-          cloud-nuke aws \
-            --config cloud-nuke-config.yml \
-            --region ${{ env.AWS_REGION }} \
-            --dry-run \
-            --timeout 30m \
-            --log-level info
-        env:
           DISABLE_TELEMETRY: "true"
 
   #############################################################################
@@ -258,7 +301,14 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [terraform-fmt, terraform-validate, tflint, trivy, tests-unit, integration-tests]
+    needs:
+      - terraform-fmt
+      - terraform-validate
+      - tflint
+      - trivy
+      - tests-unit
+      - integration-test
+      - cleanup-fallback
     if: always()
     steps:
       - name: Check all jobs
@@ -271,15 +321,24 @@ jobs:
           echo ""
           echo "Test Results:"
           echo "  - tests-unit: ${{ needs.tests-unit.result }}"
-          echo "  - integration-tests: ${{ needs.integration-tests.result }}"
+          echo "  - integration-test: ${{ needs.integration-test.result }}"
+          echo ""
+          echo "Cleanup Results:"
+          echo "  - cleanup-fallback: ${{ needs.cleanup-fallback.result }}"
 
-          # Fail if any required job failed
+          # Fail if any required static analysis or unit test job failed (skipped is OK for comment triggers)
           if [[ "${{ needs.terraform-fmt.result }}" == "failure" ]] || \
              [[ "${{ needs.terraform-validate.result }}" == "failure" ]] || \
              [[ "${{ needs.tflint.result }}" == "failure" ]] || \
              [[ "${{ needs.trivy.result }}" == "failure" ]] || \
              [[ "${{ needs.tests-unit.result }}" == "failure" ]]; then
             echo "One or more required jobs failed"
+            exit 1
+          fi
+
+          # Fail if integration tests failed
+          if [[ "${{ needs.integration-test.result }}" == "failure" ]]; then
+            echo "Integration tests failed"
             exit 1
           fi
 

@@ -1,10 +1,28 @@
 version: '3'
 
+# =============================================================================
+# CUSTOMIZE THESE FOR YOUR PROJECT
+# =============================================================================
 vars:
-  TERRAFORM_VERSION: "1.6.6"
-  GO_VERSION: "1.21"
-  AWS_REGION: "us-west-2"
-  TFLINT_VERSION: "v0.50.3"
+  PROJECT_NAME: eks-cluster
+  AWS_REGION: us-west-1
+  # Paths for static analysis (terraform validate runs on each)
+  VALIDATE_PATHS: "modules/eks-cluster examples/vpc examples/eks"
+
+  # Go test configuration
+  TEST_DIR: test
+  INTEGRATION_TEST_TIMEOUT: 55m
+
+  # Required tools (checked by 'task setup')
+  REQUIRED_TOOLS: terraform go tflint trivy task jq pre-commit
+  TFLINT_VERSION: v0.50.3
+
+# Export Taskfile vars as environment variables for CI scripts and Go tests
+env:
+  PROJECT_NAME: "{{.PROJECT_NAME}}"
+  AWS_REGION: "{{.AWS_REGION}}"
+  TF_VAR_aws_region: "{{.AWS_REGION}}"
+# =============================================================================
 
 tasks:
   default:
@@ -26,14 +44,20 @@ tasks:
     cmds:
       - terraform fmt -recursive
 
-  validate:
-    desc: "Validate Terraform configuration"
+  validate-tf:
+    desc: "Validate Terraform configuration (use '-- <dir>' for a single directory)"
     cmds:
-      - cmd: cd modules/eks-cluster && terraform init -backend=false && terraform validate
-      - cmd: cd examples/complete && terraform init -backend=false && terraform validate
+      - |
+        if [ -n "{{.CLI_ARGS}}" ]; then
+          terraform -chdir="{{.CLI_ARGS}}" init -input=false -backend=false
+          terraform -chdir="{{.CLI_ARGS}}" validate
+        else
+          ./ci/validate.sh "{{.VALIDATE_PATHS}}"
+        fi
 
   tflint-init:
     desc: "Initialize TFLint and download plugins"
+    internal: true
     cmds:
       - tflint --init
 
@@ -44,170 +68,115 @@ tasks:
     cmds:
       - tflint --recursive --format=compact
 
-  trivy:
-    desc: "Run Trivy security and vulnerability scan"
+  security-scan:
+    desc: "Run Trivy security scan (use '-- json' for JSON output to trivy-results.json)"
     cmds:
-      - trivy config . --format table --severity CRITICAL,HIGH,MEDIUM --exit-code 1
-
-  trivy-detailed:
-    desc: "Run Trivy with detailed output"
-    cmds:
-      - trivy config . --format json --severity CRITICAL,HIGH,MEDIUM --output trivy-results.json
-      - echo "Results saved to trivy-results.json"
+      - |
+        if [ "{{.CLI_ARGS}}" = "json" ]; then
+          trivy config . --format json --severity CRITICAL,HIGH,MEDIUM --output trivy-results.json --skip-dirs ".terraform" --skip-dirs "**/.terraform"
+          echo "Results saved to trivy-results.json"
+        else
+          trivy config . --format table --severity CRITICAL,HIGH,MEDIUM --exit-code 1 --skip-dirs ".terraform" --skip-dirs "**/.terraform"
+        fi
 
   lint:
     desc: "Run all linting and security checks"
-    deps:
-      - fmt
-      - validate
-      - tflint
-      - trivy
-
-  lint-fix:
-    desc: "Fix formatting issues"
     cmds:
-      - task fmt-fix
+      - task: fmt-fix
+      - task: validate-tf
+      - task: tflint
+      - task: security-scan
 
   ##############################################################################
-  # Unit Tests (Fast, No AWS)
+  # Tests
   ##############################################################################
 
   test-unit:
-    desc: "Run unit tests (validation, helpers - no AWS)"
+    desc: "Run unit tests. Use '-- coverage' for coverage report"
     cmds:
-      - cd test && go test -v ./unit/...
-
-  test-unit-coverage:
-    desc: "Run unit tests with coverage report"
-    cmds:
-      - cd test && go test -v -cover -coverprofile=coverage.out ./unit/...
-      - cd test && go tool cover -html=coverage.out -o coverage.html
-      - echo "Coverage report saved to test/coverage.html"
-
-  ##############################################################################
-  # Integration Tests (Slow, Real AWS - E2E/Smoke)
-  ##############################################################################
-
-  test-integration:
-    desc: "Run integration tests (deploys real EKS to AWS)"
-    prompt: "This will deploy real AWS resources (~$0.20, 25 min). Continue?"
-    cmds:
-      - cd test && go test -v -timeout 40m ./integration/...
-    env:
-      AWS_REGION: "{{.AWS_REGION}}"
-
-  test-smoke:
-    desc: "Alias for test-integration (smoke tests)"
-    prompt: "This will deploy real AWS resources (~$0.20, 25 min). Continue?"
-    cmds:
-      - task: test-integration
-
-  test-e2e:
-    desc: "Alias for test-integration (end-to-end tests)"
-    prompt: "This will deploy real AWS resources (~$0.20, 25 min). Continue?"
-    cmds:
-      - task: test-integration
-
-  ##############################################################################
-  # Combined Test Suites
-  ##############################################################################
+      - |
+        cd {{.TEST_DIR}}
+        if [ "{{.CLI_ARGS}}" = "coverage" ]; then
+          go test -v -cover -coverprofile=coverage.out ./unit/...
+          go tool cover -html=coverage.out -o coverage.html
+          echo "Coverage report: {{.TEST_DIR}}/coverage.html"
+        else
+          go test -v ./unit/...
+        fi
 
   test:
-    desc: "Run local tests (lint + unit tests)"
+    desc: "Run local tests (lint + unit)"
     cmds:
       - task: lint
       - task: test-unit
 
+  test-integration:
+    desc: "Run integration tests (Go tests handle full infra lifecycle)"
+    summary: |
+      Go tests deploy VPC, discover EKS versions, deploy parallel EKS clusters,
+      validate, and destroy everything via defer. Only AWS credentials required.
+      Override the test pattern: task test-integration -- TestEksClusterVersionMatrix
+    cmds:
+      - cd {{.TEST_DIR}} && go test -v {{if .CLI_ARGS}}-run {{.CLI_ARGS}}{{end}} -timeout {{.INTEGRATION_TEST_TIMEOUT}} ./integration/...
+
   test-all:
-    desc: "Run all tests including integration"
+    desc: "Run everything: lint + unit + integration (deploys real AWS resources)"
     prompt: "This will deploy real AWS resources. Continue?"
     cmds:
-      - task: lint
-      - task: test-unit
+      - task: test
       - task: test-integration
 
   ##############################################################################
   # Initialization Tasks
   ##############################################################################
 
-  init:
-    desc: "Initialize all Terraform configurations"
-    cmds:
-      - cmd: cd modules/eks-cluster && terraform init -backend=false
-      - cmd: cd examples/complete && terraform init -backend=false
-
   deps:
     desc: "Download Go dependencies"
+    internal: true
     cmds:
-      - cd test && go mod download
-      - cd test && go mod tidy
+      - cd {{.TEST_DIR}} && go mod download
+      - cd {{.TEST_DIR}} && go mod tidy
 
   setup:
     desc: "Setup development environment"
     cmds:
-      - task: init
+      - task: version-check
+      - task: validate-tf
       - task: deps
       - task: tflint-init
+      - git config --unset-all core.hooksPath || true
+      - pre-commit install
+      - pre-commit install --hook-type pre-push
 
   ##############################################################################
   # Cleanup Tasks
   ##############################################################################
 
   clean:
-    desc: "Clean local Terraform state and cache"
-    cmds:
-      - cmd: find . -type d -name ".terraform" -exec rm -rf {} + 2>/dev/null || true
-      - cmd: find . -type f -name ".terraform.lock.hcl" -delete
-      - cmd: find . -type f -name "*.tfstate*" -delete
-      - cmd: cd test && go clean -cache -testcache
-
-  cleanup-aws:
-    desc: "Check for orphaned AWS resources (manual review needed)"
-    cmds:
-      - echo "EKS clusters with terratest prefix:"
-      - aws eks list-clusters --region {{.AWS_REGION}} --query "clusters[?starts_with(@, 'terratest-')]" --output text
-      - echo ""
-      - echo "VPCs tagged with Test=terratest:"
-      - aws ec2 describe-vpcs --region {{.AWS_REGION}} --filters "Name=tag:Test,Values=terratest" --query "Vpcs[*].VpcId" --output text
-
-  clean-all:
     desc: "Deep clean (Terraform state + Go cache + .tflint cache)"
     cmds:
-      - task: clean
-      - cmd: rm -rf ~/.tflint.d 2>/dev/null || true
+      - ./scripts/clean.sh --all
 
-  ##############################################################################
-  # Development Workflows
-  ##############################################################################
-
-  watch:
-    desc: "Watch for changes and run lint on save"
+  cleanup-run:
+    desc: "Clean orphaned resources from a specific run. Resolves from flags/env/.task metadata. Add '-- force' to delete."
     cmds:
-      - echo "Watching Terraform files for changes..."
-      - |
-        while true; do
-          inotifywait -e modify -r modules/ examples/ || true
-          echo "---"
-          echo "Changes detected, running lint..."
-          task lint || true
-          echo "---"
-        done
-    platforms: [linux]
+      - ./ci/cleanup.sh run --region {{.AWS_REGION}} --project {{.PROJECT_NAME}} {{if eq .CLI_ARGS "force"}}--force{{end}}
+
+  cleanup-project:
+    desc: "Clean ALL resources for this project (any RunID). Add '-- force' to delete."
+    cmds:
+      - ./ci/cleanup.sh project --region {{.AWS_REGION}} --project {{.PROJECT_NAME}} {{if eq .CLI_ARGS "force"}}--force{{end}}
 
   ci:
     desc: "Run CI pipeline locally (like GitHub Actions)"
     cmds:
-      - task: fmt
-      - task: validate
-      - task: tflint
-      - task: trivy
-      - task: test-unit
+      - task: test
 
   ##############################################################################
   # Debug Tasks
   ##############################################################################
 
-  debug-terraform:
+  debug-tf:
     desc: "Enable Terraform debug logging"
     cmds:
       - echo "export TF_LOG=DEBUG"
@@ -217,51 +186,20 @@ tasks:
   debug-go:
     desc: "Run tests with verbose Go logging"
     cmds:
-      - echo "Running tests with -v flag..."
-      - cd test && go test -v -timeout 40m -run TestEksClusterComplete ./...
+      - echo "Running integration tests with -v flag..."
+      - cd {{.TEST_DIR}} && go test -v -timeout 40m ./integration/...
 
   version-check:
     desc: "Check required tool versions"
+    internal: true
     cmds:
-      - echo "Checking versions..."
-      - echo "Terraform:" && terraform version -json | grep terraform_version || terraform version
-      - echo "Go:" && go version
-      - echo "TFLint:" && tflint --version || echo "TFLint not installed"
-      - echo "Trivy:" && trivy --version || echo "Trivy not installed"
-
-  ##############################################################################
-  # Pre-commit Hooks
-  ##############################################################################
-
-  hook-install:
-    desc: "Install pre-commit hook"
-    cmds:
-      - echo "Installing pre-commit hook to .git/hooks/pre-commit..."
       - |
-        cat > .git/hooks/pre-commit << EOF
-          #!/bin/bash
-          echo "Running pre-commit checks..."
-          task lint || exit 1
-          task test-unit || exit 1
-          exit 0
-          EOF
-      - chmod +x .git/hooks/pre-commit
-      - echo "✓ Pre-commit hook installed"
-
-  hook-uninstall:
-    desc: "Remove pre-commit hook"
-    cmds:
-      - rm -f .git/hooks/pre-commit
-      - echo "✓ Pre-commit hook removed"
-
-  ##############################################################################
-  # Quick Commands
-  ##############################################################################
-
-  quick-test:
-    desc: "Quick test run (fmt + validate + unit tests)"
-    cmds:
-      - task: fmt
-      - task: validate
-      - task: test-unit
-    internal: false
+        echo "Checking tool versions..."
+        for name in {{.REQUIRED_TOOLS}}; do
+          printf "  %-12s " "${name}:"
+          if [ "$name" = "go" ]; then
+            go version 2>&1 | head -1 || echo "not installed"
+          else
+            "$name" --version 2>&1 | head -1 || echo "not installed"
+          fi
+        done

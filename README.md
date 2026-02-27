@@ -1,279 +1,222 @@
-# Terraform EKS Module Test Pipeline
+# Terraform Module Testing Template
 
-Automated test pipeline for a Terraform EKS module using **Terratest (Go)** and **GitHub Actions**.
+Copy-and-customize template for testing AWS Terraform modules with **Terratest (Go)**, **Task** runner, and **GitHub Actions**.
+
+EKS is included as a reference implementation — replace it with your module.
+
+## Requirements
+
+- [Task](https://taskfile.dev/installation/) >= 3.20 (task runner)
+- Terraform >= 1.6
+- Go >= 1.21
+- [TFLint](https://github.com/terraform-linters/tflint)
+- [Trivy](https://github.com/aquasecurity/trivy)
+- [jq](https://jqlang.github.io/jq/)
+- AWS account with credentials configured
+- [cloud-nuke](https://github.com/gruntwork-io/cloud-nuke) (for fallback cleanup)
 
 ## Quick Start
 
-### Prerequisites
-
-- Terraform >= 1.6.0
-- Go >= 1.21
-- AWS account with credentials configured
-- [Task](https://taskfile.dev/installation/) - task runner for simplified commands
-
-### Setup
+### 1. Copy this repo
 
 ```bash
-# Initialize Terraform and download dependencies
-task setup
+git clone <this-repo> my-terraform-module-tests
+cd my-terraform-module-tests
 ```
 
-This runs:
-- `terraform init` for both modules and examples
-- `go mod download` and `go mod tidy` for test dependencies
-- `tflint --init` to download linter plugins
+### 2. Replace the module
 
-## Running Tests
+Delete `modules/eks-cluster/` and add your own Terraform module under `modules/`.
+See [docs/template_guide.md](docs/template_guide.md) for detailed examples (S3, RDS, Lambda) and a checklist for new projects.
 
-### With Task
+### 3. Create test fixtures
+
+Create directories under `examples/` for your test infrastructure. Each fixture needs a `pipeline_tags` variable for resource tagging:
+
+```hcl
+# examples/<your-fixture>/variables.tf
+variable "pipeline_tags" {
+  description = "Tags for resource identification and cleanup"
+  type        = map(string)
+  default     = {}
+}
+
+# examples/<your-fixture>/main.tf
+module "my_module" {
+  source = "../../modules/my-module"
+  tags   = merge(var.pipeline_tags, { Environment = "test" })
+}
+```
+
+### 4. Update variables
+
+Edit vars in `Taskfile.yml`:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `PROJECT_NAME` | Identifies resources in AWS tags | `s3-bucket` |
+| `AWS_REGION` | AWS region for deployments | `us-east-1` |
+| `VALIDATE_PATHS` | Terraform dirs to validate | `"modules/s3 examples/basic"` |
+| `INTEGRATION_TEST_TIMEOUT` | Test timeout | `10m` |
+
+Edit vars in `.github/workflows/test.yml`:
+
+| Variable | Description |
+|----------|-------------|
+| `AWS_ROLE_ARN` | IAM role for OIDC auth |
+| `AWS_REGION` | AWS region |
+
+### 5. Write tests
+
+Follow `test/integration/eks_version_test.go` as a pattern:
+
+```go
+func TestMyModule(t *testing.T) {
+    terraformOptions := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
+        TerraformDir: filepath.Join("..", "..", "examples", "basic"),
+    })
+    defer terraform.Destroy(t, terraformOptions)
+    terraform.InitAndApply(t, terraformOptions)
+    // Validate outputs and infrastructure
+}
+```
+
+### 6. Run
 
 ```bash
-# Show all available tasks
-task --list
-
-# Quick feedback loop (no AWS, ~3 seconds)
-task test-unit              # Pure unit tests (validation, helpers)
-
-# Complete local validation (no AWS, ~3 minutes)
-task test                   # Static analysis + unit tests
-
-# Integration/E2E tests (real AWS, ~25 min, ~$0.20)
-task test-integration       # Full deployment with validation
-task test-smoke             # Alias for integration tests
-task test-e2e               # Alias for integration tests
-
-# Run everything
-task test-all               # Static + unit + integration
-
-# Individual checks
-task fmt           # Check formatting
-task fmt-fix       # Fix formatting
-task validate      # Validate Terraform
-task tflint        # Run TFLint
-task trivy         # Run security & vulnerability scan
+task setup    # Initialize terraform + go deps
+task test     # Lint + unit tests (no AWS)
 ```
 
-## Project Structure
+## Test Infrastructure Lifecycle
+
+Go tests manage the full infrastructure lifecycle — no external scripts or CI steps needed.
+
+The pattern used by `eks_version_test.go`:
+
+1. Deploy shared VPC via `terraform.InitAndApply`
+2. Pass VPC outputs (`vpc_id`, `private_subnets`) to parallel EKS subtests
+3. Each EKS subtest gets its own temp directory (avoids state lock conflicts)
+4. `defer terraform.Destroy` ensures cleanup in correct order (EKS first, then VPC)
 
 ```
-terratest/
-├── modules/
-│   └── eks-cluster/              # EKS wrapper module
-├── examples/
-│   └── complete/                 # Full test fixture
-├── test/
-│   └── eks_cluster_test.go        # Integration tests
-├── .github/workflows/
-│   └── test.yml                   # GitHub Actions pipeline
-├── docs/                          # Project documentation
-├── .tflint.hcl                    # TFLint config
-├── .trivyignore                   # Trivy exceptions
-├── Taskfile.yml                   # Task automation
-└── README.md                       # This file
+TestEksClusterVersionMatrix
+  ├── Deploy VPC (once)
+  ├── Discover EKS versions from AWS
+  ├── t.Run("group", ...)
+  │   ├── EKS 1.31 (parallel) → deploy, validate, defer destroy
+  │   └── EKS 1.32 (parallel) → deploy, validate, defer destroy
+  └── Destroy VPC (after all subtests complete)
 ```
 
-## Available Commands
+## Pipeline Tags
+
+Every resource is automatically tagged by Go test helpers (`getPipelineTags` in `helpers_test.go`):
+
+| Tag | Value | Purpose |
+|-----|-------|---------|
+| `Pipeline` | `PROJECT_NAME` from env | Identifies which project created it |
+| `RunID` | GitHub run ID or `local-YYYYMMDD-HHMMSS` | Identifies the specific run |
+| `Environment` | `ci` or `local` | Distinguishes CI from developer runs |
+
+### Cleanup
+
+```bash
+task cleanup-fallback     # Delete resources matching Pipeline + RunID tags
+task cleanup-project      # Delete ALL resources for this project (dry-run only)
+```
+
+## Task Commands
 
 ### Static Analysis
 
 | Command | Purpose |
 |---------|---------|
 | `task fmt` | Check Terraform formatting |
-| `task fmt-fix` | Fix formatting issues |
-| `task validate` | Validate Terraform syntax |
-| `task tflint` | Run linter checks |
-| `task trivy` | Security & vulnerability scanning |
-| `task trivy-detailed` | Detailed scan with JSON output |
+| `task fmt-fix` | Fix formatting |
+| `task validate-tf` | Validate Terraform syntax |
+| `task tflint` | Run linter |
+| `task security-scan` | Security scanning (use `-- json` for JSON output) |
 | `task lint` | Run all checks |
 
 ### Testing
 
-| Command | Purpose | Time | AWS | Cost |
-|---------|---------|------|-----|------|
-| `task test-unit` | Pure unit tests (48 tests) | ~3s | No | $0 |
-| `task test` | Static + unit tests | ~3min | No | $0 |
-| `task test-integration` | E2E/smoke tests (real deployment) | ~25min | Yes | ~$0.20 |
-| `task test-e2e` | Alias for integration | ~25min | Yes | ~$0.20 |
-| `task test-smoke` | Alias for integration | ~25min | Yes | ~$0.20 |
-| `task test-all` | Everything (static + unit + integration) | ~30min | Yes | ~$0.20 |
+| Command | Purpose | AWS Required |
+|---------|---------|:---:|
+| `task test-unit` | Unit tests (48 tests, ~3s) | No |
+| `task test` | Fmt + validate-tf + lint + unit tests | No |
+| `task test-integration` | Deploy → test → destroy | Yes |
+| `task test-all` | Lint + unit + integration | Yes |
 
 ### Utilities
 
 | Command | Purpose |
 |---------|---------|
-| `task setup` | Initialize dev environment |
-| `task init` | Initialize Terraform |
-| `task deps` | Download Go dependencies |
-| `task clean` | Clean local Terraform/Go cache |
-| `task cleanup-aws` | List orphaned AWS resources |
-| `task version-check` | Verify tool versions |
+| `task setup` | Initialize dev environment (includes pre-commit hooks) |
 | `task ci` | Run CI pipeline locally |
+| `task clean` | Clean terraform state + go cache |
+| `task validate-tf -- <dir>` | Validate a single directory |
+| `pre-commit run -a` | Run all pre-commit hooks manually |
 
-## GitHub Actions Setup
+## CI/CD
 
-### 1. Create OIDC Provider
+The GitHub Actions workflow (`.github/workflows/test.yml`) runs the same `task` commands as local development.
 
-```bash
-aws iam create-open-id-connect-provider \
-  --url https://token.actions.githubusercontent.com \
-  --client-id-list sts.amazonaws.com \
-  --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
+### Pipeline stages
+
+```
+Static analysis (parallel) → Unit tests → Integration tests → Cleanup fallback
 ```
 
-### 2. Create IAM Role
+Integration tests run on master pushes and can be triggered on PRs by either:
+- Adding the `run-integration-tests` label
+- Commenting `/test-integration` on the PR (skips static analysis and unit tests since they already passed on push)
 
-```bash
-aws iam create-role \
-  --role-name github-actions-terratest \
-  --assume-role-policy-document file://trust-policy.json
+Integration tests handle the full lifecycle internally: deploy VPC, discover EKS versions, deploy parallel EKS clusters, validate, and destroy everything via `defer`.
+
+## Project Structure
+
+```
+├── modules/
+│   └── eks-cluster/               # REFERENCE: Replace with your module
+├── examples/
+│   ├── vpc/                       # Layer: VPC infrastructure
+│   └── eks/                       # Layer: EKS cluster (version testing)
+├── test/
+│   ├── integration/
+│   │   ├── eks_version_test.go    # REFERENCE: Version matrix testing
+│   │   └── helpers_test.go        # Shared test helpers
+│   └── unit/
+│       ├── validation.go          # Validation functions
+│       └── validation_test.go     # Unit tests
+├── scripts/
+│   └── clean.sh                   # Deep clean utility (state + cache)
+├── Taskfile.yml                   # Task runner configuration
+├── .github/workflows/test.yml    # CI/CD pipeline
+├── .cloud-nuke-config.template.yml  # Cleanup config template
+└── docs/                          # Documentation
 ```
 
-Trust policy (`trust-policy.json`):
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
-      },
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-        },
-        "StringLike": {
-          "token.actions.githubusercontent.com:sub": "repo:YOUR_ORG/YOUR_REPO:*"
-        }
-      }
-    }
-  ]
-}
-```
-
-### 3. Add Required Permissions
-
-```bash
-aws iam attach-role-policy \
-  --role-name github-actions-terratest \
-  --policy-arn arn:aws:iam::aws:policy/AmazonEKSFullAccess
-
-# Add VPC, IAM, CloudWatch permissions as needed
-```
-
-### 4. Add GitHub Secret
-
-In your GitHub repository:
-
-1. Go to **Settings** → **Secrets and variables** → **Actions**
-2. Create secret `AWS_ROLE_ARN` with the role ARN from step 2
-
-## Local Testing
-
-### Cost Optimization
-
-Integration tests deploy real AWS resources:
-
-- **Complete test**: ~$0.15-0.20 per run (20-30 min)
-- **Minimal test**: ~$0.08-0.10 per run (15-20 min)
-
-**Tips:**
-- Use `task test-integration-minimal` for faster feedback
-- Integration tests only run on `main` branch or with explicit label in CI
-- Always verify cleanup with `task cleanup-aws`
-
-### Debugging
-
-```bash
-# Enable Terraform debug logging
-export TF_LOG=DEBUG
-export TF_LOG_PATH=/tmp/terraform.log
-task test-integration-minimal
-
-# View logs
-tail -f /tmp/terraform.log
-
-# Check for orphaned resources
-task cleanup-aws
-```
-
-### Pre-commit Hook
-
-Automatically run tests before commits:
-
-```bash
-# Install
-task hook-install
-
-# Uninstall
-task hook-uninstall
-```
+Files marked `REFERENCE` contain EKS-specific code — replace with your module's implementation.
 
 ## Troubleshooting
 
-### "Module not installed"
-
-```bash
-task init
-```
-
 ### Tests timeout
 
-Increase timeout in Taskfile or command:
-
 ```bash
-cd test
-go test -v -timeout 60m ./...
-```
-
-### Terraform state corrupted
-
-```bash
-task clean
-task setup
+# Increase timeout in Taskfile.yml:
+# INTEGRATION_TEST_TIMEOUT: 60m
 ```
 
 ### Orphaned AWS resources
 
 ```bash
-task cleanup-aws
-
-# Manual cleanup
-aws eks delete-cluster --name terratest-xxx
-aws ec2 delete-vpc --vpc-id vpc-xxx
+task cleanup-fallback     # Clean up resources from last run
+task cleanup-project      # See ALL resources for this project (dry-run)
 ```
 
-## Quick Commands
+### Terraform state corrupted
 
 ```bash
-# Everything (like GitHub Actions CI)
-task ci
-
-# Quick feedback loop
-task quick-test
-
-# Watch files and auto-lint
-task watch
+task clean && task setup
 ```
-
-## Contributing
-
-1. Format code: `task fmt-fix`
-2. Run tests: `task test`
-3. Add feature docs to `docs/`
-4. Update architecture if needed
-
-## Tools
-
-- **Terraform**: Infrastructure as code
-- **Terratest**: Infrastructure testing framework (Go)
-- **TFLint**: Terraform linter
-- **Trivy**: Security and vulnerability scanner (IaC, containers, config)
-- **GitHub Actions**: CI/CD pipeline
-- **Task**: Command task runner
-
-## License
-
-See LICENSE file for details.

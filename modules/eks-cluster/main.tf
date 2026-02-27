@@ -1,3 +1,6 @@
+# REFERENCE IMPLEMENTATION: Replace this module with your own Terraform module.
+# This is a wrapper around terraform-aws-modules/eks/aws.
+
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 20.8"
@@ -29,6 +32,10 @@ module "eks" {
   # Logging
   cloudwatch_log_group_retention_in_days = var.cloudwatch_log_group_retention_in_days
   cluster_enabled_log_types              = var.cluster_enabled_log_types
+
+  # Encryption
+  create_kms_key            = var.create_kms_key
+  cluster_encryption_config = var.cluster_encryption_config
 
   # Tags
   tags         = var.tags

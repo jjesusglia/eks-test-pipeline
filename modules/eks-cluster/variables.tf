@@ -6,7 +6,12 @@ variable "cluster_name" {
 variable "cluster_version" {
   description = "Kubernetes version for the EKS cluster"
   type        = string
-  default     = "1.29"
+  default     = "1.31"
+
+  validation {
+    condition     = can(regex("^1\\.(3[1-9]|[4-9][0-9])$", var.cluster_version))
+    error_message = "Cluster version must be 1.31 or higher (format: 1.XX)."
+  }
 }
 
 variable "vpc_id" {
@@ -102,4 +107,16 @@ variable "cluster_enabled_log_types" {
   description = "List of control plane log types to enable"
   type        = list(string)
   default     = ["api", "audit", "authenticator"]
+}
+
+variable "create_kms_key" {
+  description = "Controls if a KMS key for cluster encryption should be created"
+  type        = bool
+  default     = true
+}
+
+variable "cluster_encryption_config" {
+  description = "Encryption configuration. Set provider_key_arn when using external KMS key."
+  type        = any
+  default     = { resources = ["secrets"] }
 }

@@ -1,52 +1,20 @@
+# REFERENCE IMPLEMENTATION: Only needed for parallel version testing.
+# Remove this fixture if your project doesn't test multiple versions.
+
 provider "aws" {
   region = var.aws_region
 }
 
-data "aws_availability_zones" "available" {
-  state = "available"
-}
-
 locals {
-  name = var.cluster_name
-  azs  = slice(data.aws_availability_zones.available.names, 0, 2)
+  name = var.pipeline_run_hash != "" ? "${var.cluster_name}-${var.pipeline_run_hash}" : var.cluster_name
 
-  tags = {
-    Environment = var.environment
-    Terraform   = "true"
-    Test        = "true"
-    Owned       = "terratest"
-    GitHubRunID = var.github_run_id
-  }
-}
-
-################################################################################
-# VPC Module
-################################################################################
-
-module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
-  version = "~> 5.5"
-
-  name = "${local.name}-vpc"
-  cidr = var.vpc_cidr
-
-  azs             = local.azs
-  private_subnets = [for k, v in local.azs : cidrsubnet(var.vpc_cidr, 4, k)]
-  public_subnets  = [for k, v in local.azs : cidrsubnet(var.vpc_cidr, 8, k + 48)]
-  intra_subnets   = [for k, v in local.azs : cidrsubnet(var.vpc_cidr, 8, k + 52)]
-
-  enable_nat_gateway = true
-  single_nat_gateway = true
-
-  public_subnet_tags = {
-    "kubernetes.io/role/elb" = 1
-  }
-
-  private_subnet_tags = {
-    "kubernetes.io/role/internal-elb" = 1
-  }
-
-  tags = local.tags
+  tags = merge(var.pipeline_tags, {
+    Environment    = var.environment
+    Terraform      = "true"
+    Test           = "true"
+    Owned          = "terratest"
+    ClusterVersion = var.cluster_version
+  })
 }
 
 ################################################################################
@@ -59,8 +27,8 @@ module "eks" {
   cluster_name    = local.name
   cluster_version = var.cluster_version
 
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnets
+  vpc_id     = var.vpc_id
+  subnet_ids = length(var.private_subnet_ids) > 0 ? var.private_subnet_ids : var.private_subnets
 
   cluster_endpoint_public_access  = true
   cluster_endpoint_private_access = true

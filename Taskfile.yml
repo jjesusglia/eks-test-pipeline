@@ -154,16 +154,10 @@ tasks:
     cmds:
       - ./scripts/clean.sh --all
 
-  cleanup-fallback:
-    desc: "Safety net: cloud-nuke cleanup scoped to Pipeline + RunID (used by CI after integration tests)"
-    internal: true
-    cmds:
-      - ./ci/cleanup.sh fallback --region {{.AWS_REGION}} --project {{.PROJECT_NAME}} --run-id ${PIPELINE_RUN_ID:-unknown}
-
   cleanup-run:
-    desc: "Clean orphaned resources from current/last run (Pipeline + RunID). Add '-- force' to delete."
+    desc: "Clean orphaned resources from a specific run. Resolves from flags/env/.task metadata. Add '-- force' to delete."
     cmds:
-      - ./ci/cleanup.sh run --region {{.AWS_REGION}} {{if eq .CLI_ARGS "force"}}--force{{end}}
+      - ./ci/cleanup.sh run --region {{.AWS_REGION}} --project {{.PROJECT_NAME}} {{if eq .CLI_ARGS "force"}}--force{{end}}
 
   cleanup-project:
     desc: "Clean ALL resources for this project (any RunID). Add '-- force' to delete."

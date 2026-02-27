@@ -257,9 +257,10 @@ jobs:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run cleanup fallback
-        run: task cleanup-fallback
+      - name: Run cleanup
+        run: task cleanup-run -- force
         env:
+          PIPELINE_RUN_ID: "${{ github.run_id }}"
           CLOUD_NUKE_VERSION: v0.46.0
           DISABLE_TELEMETRY: "true"
 

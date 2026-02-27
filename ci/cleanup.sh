@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # ci/cleanup.sh — Cloud-nuke cleanup with subcommands
 # Usage:
-#   ci/cleanup.sh fallback --region <r> --project <p> --run-id <id>
-#   ci/cleanup.sh run      --region <r> [--force]
-#   ci/cleanup.sh project  --region <r> --project <p> [--force]
+#   ci/cleanup.sh run     [--region <r>] [--project <p>] [--run-id <id>] [--force]
+#   ci/cleanup.sh project [--region <r>] [--project <p>] [--force]
 #
-# The 'fallback' subcommand is used by CI as a safety net (always --force).
-# The 'run' subcommand cleans resources from the last run (uses .task/run-metadata.env).
+# The 'run' subcommand cleans resources from a specific run. It resolves
+# --project and --run-id from (in order): flags, env vars (PROJECT_NAME,
+# PIPELINE_RUN_ID), or .task/run-metadata.env.
 # The 'project' subcommand cleans ALL resources for a project (any RunID).
 #
+# Dry-run by default. Add --force to actually delete resources.
 # Reusable: reads .cloud-nuke-config.template.yml from repo root.
 set -euo pipefail
 
-SUBCOMMAND="${1:?Usage: ci/cleanup.sh <fallback|run|project> [options]}"
+SUBCOMMAND="${1:?Usage: ci/cleanup.sh <run|project> [options]}"
 shift
 
 # Defaults
@@ -73,56 +74,60 @@ run_nuke() {
   cloud-nuke aws --config .task/cloud-nuke-config.yml --region "$REGION" $force_flag
 }
 
+# Resolve project and run-id from flags → env vars → metadata file
+resolve_run_metadata() {
+  # Try env vars if flags not set
+  [[ -z "$PROJECT" ]] && PROJECT="${PROJECT_NAME:-}"
+  [[ -z "$RUN_ID" ]] && RUN_ID="${PIPELINE_RUN_ID:-}"
+
+  # Fall back to metadata file
+  if [[ -z "$PROJECT" || -z "$RUN_ID" ]] && [[ -f .task/run-metadata.env ]]; then
+    # shellcheck disable=SC1091
+    source .task/run-metadata.env
+    [[ -z "$PROJECT" ]] && PROJECT="${PIPELINE_TAG:-}"
+    [[ -z "$RUN_ID" ]] && RUN_ID="${PIPELINE_RUN_ID:-}"
+  fi
+}
+
 case "$SUBCOMMAND" in
-  fallback)
-    [[ -z "$REGION" ]] && { echo "Error: --region required" >&2; exit 1; }
-    [[ -z "$PROJECT" ]] && { echo "Error: --project required" >&2; exit 1; }
-    RUN_ID="${RUN_ID:-${PIPELINE_RUN_ID:-unknown}}"
-
-    echo "=== Cleanup fallback: Pipeline=${PROJECT}, RunID=${RUN_ID} ==="
-    ensure_cloud_nuke
-    generate_config "$PROJECT" "$RUN_ID"
-    FORCE=true run_nuke
-    ;;
-
   run)
     [[ -z "$REGION" ]] && { echo "Error: --region required" >&2; exit 1; }
 
-    if [[ -f .task/run-metadata.env ]]; then
-      # shellcheck disable=SC1091
-      source .task/run-metadata.env
-    else
-      echo "No run metadata found. Skipping."
-      exit 0
-    fi
+    resolve_run_metadata
 
-    echo "=== Scope: Pipeline=${PIPELINE_TAG}, RunID=${PIPELINE_RUN_ID} ==="
-    generate_config "$PIPELINE_TAG" "$PIPELINE_RUN_ID"
+    [[ -z "$PROJECT" ]] && { echo "Error: could not resolve project (use --project, PROJECT_NAME env, or .task/run-metadata.env)" >&2; exit 1; }
+    [[ -z "$RUN_ID" ]] && { echo "Error: could not resolve run-id (use --run-id, PIPELINE_RUN_ID env, or .task/run-metadata.env)" >&2; exit 1; }
+
+    echo "=== Cleanup run: Pipeline=${PROJECT}, RunID=${RUN_ID} ==="
+    ensure_cloud_nuke
+    generate_config "$PROJECT" "$RUN_ID"
     run_nuke
 
     if ! $FORCE; then
       echo ""
-      echo "DRY RUN. To delete: ci/cleanup.sh run --region $REGION --force"
+      echo "DRY RUN. To delete: task cleanup-run -- force"
     fi
     ;;
 
   project)
     [[ -z "$REGION" ]] && { echo "Error: --region required" >&2; exit 1; }
+    [[ -z "$PROJECT" ]] && PROJECT="${PROJECT_NAME:-}"
     [[ -z "$PROJECT" ]] && { echo "Error: --project required" >&2; exit 1; }
 
-    echo "=== Scope: Pipeline=${PROJECT} (ALL runs) ==="
+    echo "=== Cleanup project: Pipeline=${PROJECT} (ALL runs) ==="
+    ensure_cloud_nuke
     generate_config "$PROJECT" ""
     run_nuke
 
     if ! $FORCE; then
       echo ""
-      echo "DRY RUN. To delete: ci/cleanup.sh project --region $REGION --project $PROJECT --force"
+      echo "DRY RUN. To delete: task cleanup-project -- force"
     fi
     ;;
 
   *)
     echo "Unknown subcommand: $SUBCOMMAND" >&2
-    echo "Usage: ci/cleanup.sh <fallback|run|project> [options]" >&2
+    echo "Usage: ci/cleanup.sh <run|project> [options]" >&2
     exit 1
     ;;
 esac

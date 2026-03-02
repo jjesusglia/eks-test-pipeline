@@ -35,17 +35,14 @@ tasks:
   ##############################################################################
 
   fmt:
-    desc: "Check Terraform formatting"
-    cmds:
-      - terraform fmt -check -recursive -diff
-
-  fmt-fix:
     desc: "Fix Terraform formatting"
+    internal: true
     cmds:
       - terraform fmt -recursive
 
   validate-tf:
     desc: "Validate Terraform configuration (use '-- <dir>' for a single directory)"
+    internal: true
     cmds:
       - |
         if [ -n "{{.CLI_ARGS}}" ]; then
@@ -63,6 +60,7 @@ tasks:
 
   tflint:
     desc: "Run TFLint linter"
+    internal: true
     deps:
       - tflint-init
     cmds:
@@ -82,7 +80,7 @@ tasks:
   lint:
     desc: "Run all linting and security checks"
     cmds:
-      - task: fmt-fix
+      - task: fmt
       - task: validate-tf
       - task: tflint
       - task: security-scan
@@ -93,6 +91,7 @@ tasks:
 
   test-unit:
     desc: "Run unit tests. Use '-- coverage' for coverage report"
+    internal: true
     cmds:
       - |
         cd {{.TEST_DIR}}
@@ -104,7 +103,7 @@ tasks:
           go test -v ./unit/...
         fi
 
-  test:
+  test-local:
     desc: "Run local tests (lint + unit)"
     cmds:
       - task: lint
